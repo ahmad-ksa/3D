@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "studio3d",
   "display_name": "Studio3D — مولّد المجسمات ثلاثية الأبعاد",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Generate 3D models locally on your NVIDIA GPU (photos, image or text to 3D), AI texturing, quad topology and automatic skeleton via Blender, and a model library Claude can reuse.",
   "long_description": "Requires Studio3D installed with: irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex",
   "author": {

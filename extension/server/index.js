@@ -39,11 +39,34 @@ const child = spawn(python, ['-m', 'studio3d.mcp_server'], {
   windowsHide: true,
   env: { ...process.env, PYTHONPATH: app, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
 });
-// relay the MCP stdio channel explicitly (works with any parent transport)
-process.stdin.pipe(child.stdin);
+// Relay the MCP stdio channel line by line. Newer Claude clients first send requests that the
+// server's MCP library (1.6) does not know (e.g. "server/discover") and that would crash it:
+// answer those here with "method not found" so the client falls back to the classic handshake.
+const KNOWN = /^(initialize|ping|tools\/|resources\/|prompts\/|logging\/|completion\/|notifications\/)/;
+let buf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  let i;
+  while ((i = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, i);
+    buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    let msg = null;
+    try { msg = JSON.parse(line); } catch (e) {}
+    if (msg && typeof msg.method === 'string' && !KNOWN.test(msg.method)) {
+      if (msg.id !== undefined && msg.id !== null) {
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id,
+          error: { code: -32601, message: `Method not found: ${msg.method}` } }) + '\n');
+      }
+      continue;  // unknown notification: drop
+    }
+    child.stdin.write(line + '\n');
+  }
+});
 child.stdout.pipe(process.stdout);
 child.stderr.on('data', (d) => { process.stderr.write(d); try { fs.appendFileSync(path.join(dir, 'extension.log'), d); } catch (e) {} });
 child.on('exit', (code, sig) => { log(`python exited code=${code} signal=${sig}`); process.exit(code ?? 0); });
 child.on('error', (err) => { log(`spawn error: ${err}`); process.exit(1); });
-process.stdin.on('end', () => child.stdin.end());
+process.stdin.on('end', () => { if (buf.trim()) child.stdin.write(buf + '\n'); child.stdin.end(); });
 for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => child.kill(s));
