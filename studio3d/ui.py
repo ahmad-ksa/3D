@@ -191,6 +191,82 @@ def gen_multiview(front, back, left, right, *opts, progress=gr.Progress(track_tq
     return _run("multiview", inputs, None, *opts, progress=progress)
 
 
+# ---------------------------------------------------------------------------
+# Character sheet -> 4 views
+# ---------------------------------------------------------------------------
+_BOX_NAMES = ["أمام", "خلف", "يسار", "يمين"]
+_BOX_COLORS = [(91, 91, 214), (214, 91, 91), (40, 160, 90), (230, 150, 20)]
+
+
+def _draw_boxes(img, pts):
+    from PIL import ImageDraw
+    im = img.convert("RGB").copy()
+    d = ImageDraw.Draw(im)
+    lw = max(2, im.width // 300)
+    for i in range(0, len(pts) - 1, 2):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        k = i // 2
+        d.rectangle([min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)], outline=_BOX_COLORS[k], width=lw)
+        d.text((min(x0, x1) + 6, min(y0, y1) + 4), str(k + 1), fill=_BOX_COLORS[k])
+    if len(pts) % 2 == 1:
+        x, y = pts[-1]
+        r = lw * 3
+        d.ellipse([x - r, y - r, x + r, y + r], fill=_BOX_COLORS[len(pts) // 2])
+    return im
+
+
+def _next_hint(pts):
+    if len(pts) >= 8:
+        return "✅ حُدّدت المربعات الأربعة — اضغط **✂️ قسّم ووزّع**"
+    k = len(pts) // 2
+    corner = "الزاوية الأولى" if len(pts) % 2 == 0 else "الزاوية المقابلة"
+    return f"اضغط {corner} لمربع **{k + 1} ({_BOX_NAMES[k]})**"
+
+
+def sheet_loaded(img, mode):
+    if img is None:
+        return None, [], gr.update(value=None, visible=False), ""
+    manual = mode == "boxes"
+    return img, [], gr.update(value=img if manual else None, visible=manual), (_next_hint([]) if manual else "")
+
+
+def sheet_mode_changed(mode, orig):
+    manual = mode == "boxes"
+    return (gr.update(value=orig if (manual and orig is not None) else None, visible=manual), [],
+            _next_hint([]) if manual else "")
+
+
+def sheet_click(orig, pts, evt: gr.SelectData):
+    if orig is None:
+        raise gr.Error("ارفع الصورة أولاً.")
+    pts = list(pts or [])
+    if len(pts) >= 8:
+        pts = []
+    pts.append(tuple(int(v) for v in evt.index))
+    return pts, _draw_boxes(orig, pts), _next_hint(pts)
+
+
+def sheet_split(orig, mode, pts):
+    from . import sheet as sh
+    if orig is None:
+        raise gr.Error("ارفع الصورة الكاملة أولاً.")
+    try:
+        if mode == "boxes":
+            if len(pts or []) < 8:
+                raise ValueError("حدّد 4 مربعات (زاويتين لكل مربع)")
+            boxes = []
+            for i in range(0, 8, 2):
+                (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+                boxes.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+            views = sh.split(orig, "boxes", boxes)
+        else:
+            views = sh.split(orig, mode)
+    except Exception as e:  # noqa: BLE001
+        raise gr.Error(str(e))
+    return (views["front"], views["back"], views["left"], views["right"],
+            "✅ تم التقسيم والتوزيع — راجع الجهات، واستخدم أزرار ⇄ إذا انعكس شيء")
+
+
 def gen_single(image, *opts, progress=gr.Progress(track_tqdm=True)):
     if image is None:
         raise gr.Error("ارفع صورة أولاً.")
@@ -426,10 +502,36 @@ def build() -> gr.Blocks:
                             mv = {v: gr.Image(type="pil", image_mode="RGBA", label=VIEW_LABELS[v], height=150,
                                               min_width=110, elem_classes="img-in", show_download_button=False)
                                   for v in ("front", "back", "left", "right")}
+                        with gr.Row(elem_classes="compact"):
+                            sw_fb = gr.Button("⇄ أمام / خلف", size="sm")
+                            sw_lr = gr.Button("⇄ يسار / يمين", size="sm")
+                        with gr.Accordion("📄 عندك صورة واحدة فيها الجهات الأربع؟ قسّمها تلقائياً", open=False):
+                            with gr.Row(elem_classes="compact"):
+                                sheet_in = gr.Image(type="pil", label="الصورة الكاملة", height=170, scale=3,
+                                                    show_download_button=False)
+                                with gr.Column(scale=2, min_width=170):
+                                    sheet_mode = gr.Radio([("تلقائي", "auto"), ("صف من 4", "row"),
+                                                           ("شبكة 2×2", "grid"), ("تحديد يدوي", "boxes")],
+                                                          value="auto", label="طريقة التقسيم")
+                                    sheet_btn = gr.Button("✂️ قسّم ووزّع", variant="secondary")
+                            sheet_view = gr.Image(type="pil", label="التحديد اليدوي: اضغط زاويتين لكل مربع",
+                                                  interactive=False, height=260, visible=False,
+                                                  show_download_button=False)
+                            sheet_msg = gr.Markdown()
+                        sheet_orig = gr.State(None)
+                        sheet_pts = gr.State([])
                         btn, opts = _generate_block()
                     with gr.Column(scale=6):
                         out = _outputs()
                 btn.click(gen_multiview, [mv["front"], mv["back"], mv["left"], mv["right"], *opts], list(out))
+                four = [mv["front"], mv["back"], mv["left"], mv["right"]]
+                sw_fb.click(lambda f, b, l, r: (b, f, l, r), four, four)
+                sw_lr.click(lambda f, b, l, r: (f, b, r, l), four, four)
+                sheet_in.change(sheet_loaded, [sheet_in, sheet_mode], [sheet_orig, sheet_pts, sheet_view, sheet_msg])
+                sheet_mode.change(sheet_mode_changed, [sheet_mode, sheet_orig],
+                                  [sheet_view, sheet_pts, sheet_msg])
+                sheet_view.select(sheet_click, [sheet_orig, sheet_pts], [sheet_pts, sheet_view, sheet_msg])
+                sheet_btn.click(sheet_split, [sheet_orig, sheet_mode, sheet_pts], [*four, sheet_msg])
 
             # ---- single image ----
             with gr.Tab("🖼️ من صورة واحدة"):

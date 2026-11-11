@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "studio3d",
   "display_name": "Studio3D — مولّد المجسمات ثلاثية الأبعاد",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Generate 3D models locally on your NVIDIA GPU (photos, image or text to 3D), AI texturing, quad topology, automatic skeleton and talking mouth animation via Blender, and a model library Claude can reuse.",
   "long_description": "Requires Studio3D installed with: irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex",
   "author": {
@@ -35,6 +35,10 @@
     {
       "name": "generate_from_images",
       "description": "Build a 3D model from 1-4 photos of the same object (front required; back/left/right improve accuracy). target_faces: 0 keeps full detail, 3000-30000 for game assets. size_mm: real-world size of the longest side (3D printing). topology='quad' gives clean all-quad topology (Blender QuadriFlow, OBJ/FB"
+    },
+    {
+      "name": "generate_from_sheet",
+      "description": "Build a 3D model from ONE character-sheet image that shows the 4 sides (front, back and two side views) in a row or a 2x2 grid. The figures are found, cropped, sized equally and assigned to front/back/left/right automatically."
     },
     {
       "name": "generate_from_image",

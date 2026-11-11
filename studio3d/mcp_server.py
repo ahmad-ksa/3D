@@ -246,6 +246,32 @@ async def generate_from_images(
 
 
 @mcp.tool()
+async def generate_from_sheet(
+    sheet: str,
+    layout: Literal["auto", "row", "grid", "column"] = "auto",
+    quality: Quality = "balanced",
+    texture: bool = True,
+    target_faces: int = 0,
+    size_mm: float = 0,
+    topology: Literal["tri", "quad"] = "tri",
+    rig: bool = False,
+    seed: Optional[int] = None,
+    formats: list[Format] = ["glb"],  # noqa: B006
+    ctx: Context = None,
+) -> list:
+    """Build a 3D model from ONE character-sheet image that shows the 4 sides (front, back and two
+    side views) in a row or a 2x2 grid. The figures are found, cropped, sized equally and assigned to
+    front/back/left/right automatically."""
+    from . import sheet as sh
+    img = _image(sheet)
+    views = sh.split(img, layout)
+    opt = _options(quality, texture, target_faces, size_mm, 0, seed, formats, topology=topology, rig=rig)
+    from . import pipeline
+    job = _start("multiview", lambda pr: pipeline.run("multiview", views, None, opt, pr))
+    return await _wait(job, ctx)
+
+
+@mcp.tool()
 async def generate_from_image(
     image: str,
     quality: Quality = "balanced",
