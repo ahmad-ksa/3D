@@ -132,7 +132,7 @@ def _friendly_error(e: Exception) -> str:
     if "OutOfMemory" in name or "out of memory" in msg.lower():
         return "امتلأت ذاكرة كرت الشاشة. اختر جودة أقل، أو أغلق البرامج الأخرى (الألعاب/المتصفح) ثم أعد المحاولة."
     if pipeline._is_network(e):
-        return ("انقطع الإنترنت أثناء تنزيل النموذج. تأكد من الاتصال ثم أعد المحاولة — "
+        return ("انقطع الإنترنت (حاول البرنامج دقيقتين بدون نجاح). تأكد من الاتصال ثم أعد المحاولة — "
                 "التنزيل يكمل من حيث توقف (مطلوب أول مرة فقط).")
     if "blocked" in msg.lower() or "4551" in msg or "Application Control" in msg:
         return ("حظر Smart App Control أحد ملفات المكتبات. افتح تبويب «الجهاز» واضغط «فحص الحماية» "

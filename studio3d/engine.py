@@ -80,7 +80,10 @@ def texture_ready() -> bool:
     snap = _local_snapshot(repo, ["hunyuan3d-delight-v2-0/*", f"{sub}/*"])
     if not snap:
         return False
-    return _diffusers_ready(snap / "hunyuan3d-delight-v2-0") and _has_weights(snap / sub)
+    # hy3dgen loads the paint UNet from exactly this file
+    paint_unet = snap / sub / "unet" / "diffusion_pytorch_model.bin"
+    return _diffusers_ready(snap / "hunyuan3d-delight-v2-0") and paint_unet.exists() and \
+        _has_weights(snap / sub / "vae") and _has_weights(snap / sub / "text_encoder")
 
 
 def text_ready() -> bool:

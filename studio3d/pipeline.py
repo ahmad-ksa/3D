@@ -86,7 +86,7 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
                 logging.getLogger("studio3d.pipeline").exception("texturing failed")
                 engine.MANAGER.unload()
                 warning = ("تم توليد الشكل لكن فشل التلوين: " +
-                           ("انقطع الإنترنت أثناء تنزيل نموذج التلوين — أعد المحاولة وسيكمل التنزيل من حيث توقف."
+                           ("انقطع الإنترنت (حاول البرنامج دقيقتين بدون نجاح) — أعد المحاولة وسيكمل التنزيل من حيث توقف."
                             if _is_network(e) else str(e)[:300]))
                 opt.texture = False
 
@@ -113,10 +113,7 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
 
 
 def _is_network(e: Exception) -> bool:
-    text = repr(e) + repr(getattr(e, "__cause__", "")) + repr(getattr(e, "__context__", ""))
-    keys = ("ConnectionError", "Timeout", "timed out", "getaddrinfo", "NameResolution", "HTTPError",
-            "Something wrong while loading")
-    return any(k in text for k in keys)
+    return config.is_network_error(e) or "Something wrong while loading" in str(e)
 
 
 def retexture(mesh_path: str, image, remove_bg: bool = True,

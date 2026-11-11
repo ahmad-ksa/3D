@@ -78,41 +78,93 @@ NUM_CHUNKS = 8000  # lower = less VRAM during mesh extraction
 EXPORT_FORMATS = ["glb", "obj", "stl", "ply", "3mf"]
 
 
+# Files the program never loads, so we never download them:
+#  * every Hunyuan3D checkpoint exists twice: .ckpt and .safetensors (~5 GB each) -> we load .safetensors
+#  * the paint UNet exists as .bin (loaded by hy3dgen) and .safetensors (unused, ~3.7 GB)
+SKIP_PATTERNS = ["*.ckpt", "hunyuan3d-paint-v2-0*/unet/*.safetensors"]
+
+DOWNLOAD_RETRY_MINUTES = float(os.environ.get("STUDIO3D_RETRY_MINUTES", "2"))
+_RETRY_DELAYS = [5, 10, 15, 20]  # seconds, then every 20 s until the 2-minute budget is used
+
+
+def is_network_error(e: BaseException) -> bool:
+    """Connection drops, timeouts, DNS failures (including wrapped/chained ones)."""
+    seen = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        name = type(e).__name__
+        text = str(e)
+        if any(k in name for k in ("Connection", "Timeout", "ChunkedEncoding", "ProtocolError",
+                                   "IncompleteRead", "RemoteDisconnected", "NameResolution",
+                                   "MaxRetry", "SSLError", "LocalEntryNotFound")):
+            return True
+        if any(k in text for k in ("getaddrinfo", "timed out", "Connection broken", "Connection reset",
+                                   "Temporary failure in name resolution", "No route to host")):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
 def patch_hf_downloads():
-    """Hunyuan3D repos ship every checkpoint twice (.ckpt and .safetensors, ~5 GB each).
-    We only load .safetensors, so never download the .ckpt duplicates."""
+    """Make every model download (ours and Hunyuan3D's internal ones):
+    1. skip files we never load (see SKIP_PATTERNS);
+    2. survive unstable internet: on a network error wait and retry automatically
+       (up to DOWNLOAD_RETRY_MINUTES), resuming from where it stopped."""
+    import logging
+    import time
+
     import huggingface_hub as hh
 
     if getattr(hh.snapshot_download, "_studio3d", False):
         return
     original = hh.snapshot_download
+    log = logging.getLogger("studio3d.download")
 
     def snapshot_download(*args, **kwargs):
         ignore = kwargs.get("ignore_patterns") or []
         if isinstance(ignore, str):
             ignore = [ignore]
-        kwargs["ignore_patterns"] = list(ignore) + ["*.ckpt"]
-        return original(*args, **kwargs)
+        kwargs["ignore_patterns"] = list(ignore) + SKIP_PATTERNS
+        if kwargs.get("local_files_only"):
+            return original(*args, **kwargs)
+        deadline = time.time() + DOWNLOAD_RETRY_MINUTES * 60
+        attempt = 0
+        while True:
+            try:
+                return original(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001
+                if not is_network_error(e) or time.time() >= deadline:
+                    raise
+                delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                attempt += 1
+                msg = (f"انقطع الاتصال أثناء التنزيل — إعادة المحاولة رقم {attempt} بعد {delay} ثانية "
+                       f"(يكمل من حيث توقف)")
+                log.warning("%s: %s", msg, str(e)[:160])
+                print(msg, flush=True)
+                time.sleep(delay)
 
     snapshot_download._studio3d = True
     hh.snapshot_download = snapshot_download
 
 
 def remove_ckpt_duplicates() -> float:
-    """Delete already-downloaded .ckpt duplicates. Returns freed GB."""
+    """Delete already-downloaded duplicates we never load (see SKIP_PATTERNS). Returns freed GB."""
     freed = 0
     hub = Path(os.environ["HF_HOME"]) / "hub"
     if not hub.exists():
         return 0.0
-    for ck in hub.glob("models--*/snapshots/*/**/*.ckpt"):
-        if ck.with_suffix(".safetensors").exists():
-            target = ck.resolve()
-            try:
-                size = target.stat().st_size
-                ck.unlink()
-                if target != ck and target.exists():
-                    target.unlink()
-                freed += size
-            except OSError:
-                pass
+    dups = [ck for ck in hub.glob("models--*/snapshots/*/**/*.ckpt")
+            if ck.with_suffix(".safetensors").exists()]
+    dups += [st for st in hub.glob("models--*/snapshots/*/hunyuan3d-paint-v2-0*/unet/*.safetensors")
+             if st.with_suffix(".bin").exists()]
+    for ck in dups:
+        target = ck.resolve()
+        try:
+            size = target.stat().st_size
+            ck.unlink()
+            if target != ck and target.exists():
+                target.unlink()
+            freed += size
+        except OSError:
+            pass
     return round(freed / 1024 ** 3, 2)

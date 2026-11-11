@@ -96,10 +96,15 @@ def test_texture_ready_detection(tmp_path, monkeypatch):
     (delight / "model_index.json").write_text(json.dumps({"_class_name": "X", "unet": ["diffusers", "U"]}))
     paint = snap / "hunyuan3d-paint-v2-0-turbo" / "unet"
     paint.mkdir(parents=True)
+    for comp in ("vae", "text_encoder"):
+        (snap / "hunyuan3d-paint-v2-0-turbo" / comp).mkdir()
+        (snap / "hunyuan3d-paint-v2-0-turbo" / comp / "w.bin").write_bytes(b"x")
     monkeypatch.setattr(engine, "_local_snapshot", lambda repo, pats: snap)
     assert not engine.texture_ready()                      # no weights yet
     (delight / "unet" / "diffusion_pytorch_model.safetensors").write_bytes(b"x")
     assert not engine.texture_ready()                      # paint weights missing
+    (paint / "diffusion_pytorch_model.safetensors").write_bytes(b"x")
+    assert not engine.texture_ready()                      # hy3dgen needs the .bin
     (paint / "diffusion_pytorch_model.bin").write_bytes(b"x")
     assert engine.texture_ready()
     monkeypatch.setattr(engine, "_local_snapshot", lambda repo, pats: None)
