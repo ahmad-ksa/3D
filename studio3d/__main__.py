@@ -75,6 +75,9 @@ def main():
     print("=" * 60)
 
     from . import engine, ui
+    freed = config.remove_ckpt_duplicates()
+    if freed:
+        log.info("removed duplicate .ckpt model files, freed %s GB", freed)
     info = engine.device_info()
     log.info("GPU: %s", info)
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

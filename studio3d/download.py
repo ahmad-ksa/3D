@@ -5,6 +5,7 @@ from . import config
 
 
 def download_models(include_text: bool = False):
+    config.patch_hf_downloads()
     from huggingface_hub import snapshot_download
 
     jobs = []
@@ -24,4 +25,7 @@ def download_models(include_text: bool = False):
     if include_text:
         print(f"⬇️  {config.TEXT2IMAGE_MODEL} (نص ← صورة)")
         snapshot_download(repo_id=config.TEXT2IMAGE_MODEL)
+    freed = config.remove_ckpt_duplicates()
+    if freed:
+        print(f"🧹 حُذفت نسخ مكررة ووفّرنا {freed} GB")
     print("✅ اكتمل تنزيل النماذج.")

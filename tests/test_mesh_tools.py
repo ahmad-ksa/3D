@@ -46,3 +46,23 @@ def test_exports(tmp_path):
     # STL must be Z-up: lowest point at z=0 after Y-up -> Z-up rotation
     stl = trimesh.load(tmp_path / "model.stl")
     assert np.isclose(stl.bounds[0][2], 0, atol=1e-4)
+
+
+def test_hf_patch_and_ckpt_cleanup(tmp_path, monkeypatch):
+    import huggingface_hub as hh
+    from studio3d import config
+    seen = {}
+    monkeypatch.setattr(hh, "snapshot_download", lambda *a, **k: seen.update(k) or "x")
+    config.patch_hf_downloads()
+    hh.snapshot_download(repo_id="r", allow_patterns=["a/*"])
+    assert "*.ckpt" in seen["ignore_patterns"]
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    snap = tmp_path / "hub" / "models--tencent--X" / "snapshots" / "abc" / "sub"
+    snap.mkdir(parents=True)
+    (snap / "model.fp16.ckpt").write_bytes(b"0" * 2048)
+    (snap / "model.fp16.safetensors").write_bytes(b"1")
+    (snap / "only.ckpt").write_bytes(b"2")
+    config.remove_ckpt_duplicates()
+    assert not (snap / "model.fp16.ckpt").exists()
+    assert (snap / "only.ckpt").exists() and (snap / "model.fp16.safetensors").exists()

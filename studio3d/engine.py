@@ -22,6 +22,8 @@ log = logging.getLogger("studio3d.engine")
 if str(config.VENDOR_DIR) not in sys.path:
     sys.path.insert(0, str(config.VENDOR_DIR))
 
+config.patch_hf_downloads()
+
 VIEWS = ("front", "back", "left", "right")
 
 

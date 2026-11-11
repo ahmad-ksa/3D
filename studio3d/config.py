@@ -72,3 +72,43 @@ DEFAULT_PRESET = "متوازن"
 NUM_CHUNKS = 8000  # lower = less VRAM during mesh extraction
 
 EXPORT_FORMATS = ["glb", "obj", "stl", "ply", "3mf"]
+
+
+def patch_hf_downloads():
+    """Hunyuan3D repos ship every checkpoint twice (.ckpt and .safetensors, ~5 GB each).
+    We only load .safetensors, so never download the .ckpt duplicates."""
+    import huggingface_hub as hh
+
+    if getattr(hh.snapshot_download, "_studio3d", False):
+        return
+    original = hh.snapshot_download
+
+    def snapshot_download(*args, **kwargs):
+        ignore = kwargs.get("ignore_patterns") or []
+        if isinstance(ignore, str):
+            ignore = [ignore]
+        kwargs["ignore_patterns"] = list(ignore) + ["*.ckpt"]
+        return original(*args, **kwargs)
+
+    snapshot_download._studio3d = True
+    hh.snapshot_download = snapshot_download
+
+
+def remove_ckpt_duplicates() -> float:
+    """Delete already-downloaded .ckpt duplicates. Returns freed GB."""
+    freed = 0
+    hub = Path(os.environ["HF_HOME"]) / "hub"
+    if not hub.exists():
+        return 0.0
+    for ck in hub.glob("models--*/snapshots/*/**/*.ckpt"):
+        if ck.with_suffix(".safetensors").exists():
+            target = ck.resolve()
+            try:
+                size = target.stat().st_size
+                ck.unlink()
+                if target != ck and target.exists():
+                    target.unlink()
+                freed += size
+            except OSError:
+                pass
+    return round(freed / 1024 ** 3, 2)
