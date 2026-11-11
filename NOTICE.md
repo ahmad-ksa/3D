@@ -23,6 +23,9 @@ Tencent Hunyuan is a trademark of Tencent; Studio3D is not affiliated with Tence
 ## HunyuanDiT (text-to-image, optional)
 `Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled` — Tencent Hunyuan Community License.
 
+## three.js
+`studio3d/static/three/` contains three.js r170 (MIT License, see the LICENSE file there), bundled so the viewer works offline.
+
 ## Other libraries
 PyTorch (BSD), Gradio (Apache-2.0), trimesh (MIT), PyMeshLab (GPL-3.0, used as a separate
 library), rembg (MIT), diffusers / transformers (Apache-2.0).

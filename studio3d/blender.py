@@ -163,3 +163,12 @@ def auto_rig(model_path: str, out_dir: str, name: str = "model_rigged", formats=
              max_faces: int = 60000) -> dict:
     return run_script("auto_rig", {"input": str(model_path), "outdir": str(out_dir), "name": name,
                                    "formats": list(formats), "max_faces": int(max_faces)}, log_dir=out_dir)
+
+
+def open_gui(model_path: str):
+    """Open a model in a normal Blender window (for manual work). Returns immediately."""
+    exe = find_blender()
+    if not exe or _is_python(exe):
+        raise BlenderError("لم يتم العثور على Blender.")
+    subprocess.Popen([exe, "--factory-startup", "--python", str(SCRIPTS / "open_model.py"), "--",
+                      str(model_path)], close_fds=True)

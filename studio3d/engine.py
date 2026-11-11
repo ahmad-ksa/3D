@@ -198,6 +198,12 @@ def new_job_dir(kind: str) -> Path:
 
 def save_meta(job_dir: Path, meta: dict):
     (job_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:  # thumbnail for the library
+        from . import library
+        (job_dir / "thumb.png").unlink(missing_ok=True)
+        library.ensure_thumb(job_dir)
+    except Exception:  # noqa: BLE001
+        log.warning("thumbnail failed", exc_info=True)
 
 
 def prepare_image(img: Image.Image, remove_bg: bool) -> Image.Image:

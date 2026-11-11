@@ -28,6 +28,11 @@ CSS = """
                                   font-variant-numeric: tabular-nums;}
 """
 
+VIEWER_HEAD = """
+<script type="importmap">{"imports": {"three": "/s3d-static/three/three.module.min.js"}}</script>
+<script type="module" src="/s3d-static/viewer.js"></script>
+"""
+
 # Show Gradio's "12.3/45.6s" timers as "00:12 / 00:46"
 TIMER_JS = r"""
 <script>
@@ -101,8 +106,24 @@ def _generate_block(show_texture=True, label="✨ توليد المجسم"):
                  topology, rig]
 
 
+def viewer_html(path=None, stats=None, height=360) -> str:
+    """HTML for our three.js viewer (colours / clay / wireframe / x-ray / lighting / skeleton)."""
+    import html
+    import json as _json
+    src = ""
+    if path:
+        p = Path(path).resolve()
+        try:
+            rel = p.relative_to(config.OUTPUT_DIR.resolve()).as_posix()
+            src = f"/s3d-models/{rel}?v={int(p.stat().st_mtime)}"
+        except ValueError:
+            src = f"/gradio_api/file={p.as_posix()}"
+    info = html.escape(_json.dumps({"quads": (stats or {}).get("quads", 0)}), quote=True)
+    return f'<s3d-viewer src="{html.escape(src)}" info="{info}" style="--s3d-h:{height}px"></s3d-viewer>'
+
+
 def _outputs():
-    model = gr.Model3D(label="المعاينة (اسحب للتدوير)", height=360, clear_color=[0.92, 0.92, 0.95, 1])
+    model = gr.HTML(viewer_html())
     info = gr.Markdown()
     files = gr.File(label="ملفات التحميل", file_count="multiple", elem_classes="files-out")
     return model, files, info
@@ -131,7 +152,7 @@ def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, 
     quads = f" ({st['quads']:,} Quad)" if st.get("quads") else ""
     info = ("" if not res.get("warning") else f"⚠️ {res['warning']}  \n") + (f"✅ تم — **{st['faces']:,}** مضلع{quads} • **{st['vertices']:,}** نقطة • البذرة `{res['seed']}`  \n"
             f"<span class='hint'>محفوظ في: {res['job_dir']}</span>")
-    return res["preview"], res["files"], info
+    return viewer_html(res["preview"], res["stats"]), res["files"], info
 
 
 def _friendly_error(e: Exception) -> str:
@@ -178,7 +199,7 @@ def retexture(mesh_file, image, remove_bg, progress=gr.Progress(track_tqdm=True)
     except Exception as e:  # noqa: BLE001
         log.error(traceback.format_exc())
         raise gr.Error(_friendly_error(e))
-    return res["preview"], res["files"], f"✅ تم التلوين — محفوظ في {res['job_dir']}"
+    return viewer_html(res["preview"]), res["files"], f"✅ تم التلوين — محفوظ في {res['job_dir']}"
 
 
 def edit_mesh(mesh_file, clean, holes, smooth, faces, size_mm, formats):
@@ -188,7 +209,7 @@ def edit_mesh(mesh_file, clean, holes, smooth, faces, size_mm, formats):
                         size_mm=size_mm, formats=formats)
     b, a = res["before"], res["stats"]
     info = f"قبل: {b['faces']:,} مضلع ← بعد: **{a['faces']:,}** مضلع • المقاس: {a['size']}"
-    return res["preview"], res["files"], info
+    return viewer_html(res["preview"], res["stats"]), res["files"], info
 
 
 def blender_tool(mesh_file, do_quad, quad_faces, do_rig, progress=gr.Progress()):
@@ -197,6 +218,7 @@ def blender_tool(mesh_file, do_quad, quad_faces, do_rig, progress=gr.Progress())
     if not (do_quad or do_rig):
         raise gr.Error("اختر Quad أو هيكل عظمي.")
     files, preview, notes = [], None, []
+    last_stats = {}
     path = mesh_file
     try:
         if do_quad:
@@ -204,6 +226,7 @@ def blender_tool(mesh_file, do_quad, quad_faces, do_rig, progress=gr.Progress())
             q = pipeline.quad(path, int(quad_faces or 10000))
             files += q["files"]
             preview = path = q["preview"]
+            last_stats = q["stats"]
             notes.append(f"Quad: **{q['stats']['faces']:,}** وجه، منها {q['stats']['quads']:,} مربع")
         if do_rig:
             progress(0.6, desc="بناء الهيكل العظمي عبر Blender…")
@@ -214,7 +237,7 @@ def blender_tool(mesh_file, do_quad, quad_faces, do_rig, progress=gr.Progress())
     except Exception as e:  # noqa: BLE001
         log.error(traceback.format_exc())
         raise gr.Error(f"Blender: {str(e)[:400]}")
-    return preview, files, "✅ " + "  \n".join(notes)
+    return viewer_html(preview, last_stats), files, "✅ " + "  \n".join(notes)
 
 
 def last_model():
@@ -252,22 +275,68 @@ def _jobs():
     return sorted([d.name for d in config.OUTPUT_DIR.iterdir() if d.is_dir()], reverse=True)
 
 
-def refresh_history():
-    jobs = _jobs()
-    return gr.update(choices=jobs, value=jobs[0] if jobs else None)
+def library_gallery(query=""):
+    from . import library
+    items = library.list_models(query)
+    gallery = [(e["thumb"], e["name"]) for e in items if e["thumb"]]
+    ids = [e["id"] for e in items if e["thumb"]]
+    return gr.update(value=gallery), ids
 
 
-def show_job(name):
-    if not name:
-        return None, None, ""
-    d = config.OUTPUT_DIR / name
-    files = sorted(str(p) for p in d.iterdir() if p.is_file() and not p.name.startswith(("input_", "clean_")))
-    preview = next((f for f in files if f.endswith("model_textured.glb")), None) or \
-        next((f for f in files if f.endswith(".glb")), None)
-    meta = ""
-    if (d / "meta.json").exists():
-        meta = "```json\n" + (d / "meta.json").read_text(encoding="utf-8") + "\n```"
-    return preview, files, meta
+def library_select(ids, evt: gr.SelectData):
+    from . import library
+    if not ids or evt.index is None or evt.index >= len(ids):
+        return None, viewer_html(), "", None, ""
+    e = library.get(ids[evt.index])
+    tags = " • ".join(t for t, on in (("🎨 ملوّن", e["textured"]), ("🟦 Quad", e["quad"]),
+                                         ("🦴 هيكل عظمي", e["rigged"])) if on)
+    st = e["stats"] or {}
+    details = (f"**{e['name']}**  \n{tags}  \n"
+               f"<span class='hint'>{st.get('faces', '?'):,} وجه • المعرّف `{e['id']}`</span>"
+               if isinstance(st.get("faces"), int) else f"**{e['name']}**  \n{tags}")
+    return e["id"], viewer_html(e["preview"], st, height=420), e["name"], e["files"], details
+
+
+def library_rename(model_id, name, query):
+    from . import library
+    if not model_id:
+        raise gr.Error("اختر مجسماً أولاً.")
+    library.rename(model_id, name)
+    gal, ids = library_gallery(query)
+    return gal, ids, "✅ تم تغيير الاسم"
+
+
+def library_open_blender(model_id):
+    from . import library
+    if not model_id:
+        raise gr.Error("اختر مجسماً أولاً.")
+    try:
+        path = library.open_in_blender(model_id)
+    except Exception as e:  # noqa: BLE001
+        raise gr.Error(str(e))
+    return f"✅ فُتح في Blender: `{Path(path).name}`"
+
+
+def library_open_folder(model_id):
+    from . import library
+    if not model_id:
+        raise gr.Error("اختر مجسماً أولاً.")
+    library.open_folder(model_id)
+    return "📂 تم فتح المجلد"
+
+
+def library_to_tools(model_id):
+    from . import library
+    if not model_id:
+        raise gr.Error("اختر مجسماً أولاً.")
+    return library.get(model_id)["preview"], gr.Tabs(selected="tab_blender")
+
+
+def library_claude_hint(model_id):
+    if not model_id:
+        raise gr.Error("اختر مجسماً أولاً.")
+    return (f"انسخ هذا لـ Claude:  \n`استخدم المجسم {model_id} من مكتبة Studio3D`  \n"
+            "<span class='hint'>Claude يقدر يبحث في المكتبة ويستخدم أي مجسم أو ينسخه لمجلد مشروعك.</span>")
 
 
 def device_text():
@@ -303,13 +372,15 @@ def run_sac_check():
 # Layout
 # ---------------------------------------------------------------------------
 def build() -> gr.Blocks:
-    theme = gr.themes.Soft(primary_hue="indigo", secondary_hue="cyan")
+    theme = gr.themes.Soft(primary_hue="indigo", secondary_hue="cyan",
+                           font=[gr.themes.Font("Segoe UI"), gr.themes.Font("Tahoma"), "sans-serif"],
+                           font_mono=[gr.themes.Font("Consolas"), "monospace"])
     with gr.Blocks(title=config.APP_TITLE, css=CSS, theme=theme, analytics_enabled=False,
-                   head=TIMER_JS, fill_width=True) as demo:
+                   head=VIEWER_HEAD + TIMER_JS, fill_width=True) as demo:
         gr.Markdown(f"### 🧊 {config.APP_TITLE} <span class='hint'>— محلياً على جهازك ومجاناً</span>",
                     elem_id="title")
 
-        with gr.Tabs():
+        with gr.Tabs() as tabs:
             # ---- multiview ----
             with gr.Tab("📸 من 4 صور"):
                 with gr.Row():
@@ -383,7 +454,7 @@ def build() -> gr.Blocks:
                 btn4.click(edit_mesh, [emesh, eclean, eholes, esmooth, efaces, esize, eformats], list(out4))
 
             # ---- blender: quad + rig ----
-            with gr.Tab("🦴 Quad وهيكل عظمي"):
+            with gr.Tab("🦴 Quad وهيكل عظمي", id="tab_blender"):
                 with gr.Row():
                     with gr.Column(scale=5):
                         gr.Markdown("يفتح **Blender** في الخلفية، ينفّذ، يحفظ ويغلق تلقائياً.", elem_classes="hint")
@@ -400,19 +471,39 @@ def build() -> gr.Blocks:
                 use_last.click(last_model, None, bmesh_in)
                 bbtn.click(blender_tool, [bmesh_in, bq, bqf, br], list(bout))
 
-            # ---- history ----
-            with gr.Tab("🗂️ السجل"):
+            # ---- library ----
+            with gr.Tab("📚 مكتبتي"):
+                lib_ids = gr.State([])
+                lib_sel = gr.State(None)
                 with gr.Row():
-                    hsel = gr.Dropdown(choices=_jobs(), label="الأعمال السابقة", scale=4)
-                    hbtn = gr.Button("تحديث", scale=1)
-                with gr.Row():
+                    with gr.Column(scale=5):
+                        with gr.Row(elem_classes="compact"):
+                            lib_q = gr.Textbox(placeholder="بحث بالاسم أو الوصف…", show_label=False, scale=4)
+                            lib_refresh = gr.Button("🔄", scale=1, min_width=50)
+                        lib_gal = gr.Gallery(columns=4, height=470, show_label=False, allow_preview=False,
+                                             object_fit="contain")
                     with gr.Column(scale=6):
-                        hmodel = gr.Model3D(label="المعاينة", height=430)
-                    with gr.Column(scale=4):
-                        hfiles = gr.File(label="الملفات", file_count="multiple")
-                        hmeta = gr.Markdown()
-                hbtn.click(refresh_history, None, hsel)
-                hsel.change(show_job, hsel, [hmodel, hfiles, hmeta])
+                        lib_view = gr.HTML(viewer_html(height=420))
+                        lib_details = gr.Markdown()
+                        with gr.Row(elem_classes="compact"):
+                            lib_name = gr.Textbox(label="الاسم", scale=4)
+                            lib_save = gr.Button("حفظ الاسم", scale=1, min_width=90)
+                        with gr.Row(elem_classes="compact"):
+                            b_blend = gr.Button("🟧 فتح في Blender", size="sm")
+                            b_folder = gr.Button("📂 فتح المجلد", size="sm")
+                            b_tools = gr.Button("🦴 Quad / هيكل", size="sm")
+                            b_claude = gr.Button("🤖 لـ Claude", size="sm")
+                        lib_msg = gr.Markdown()
+                        lib_files = gr.File(label="الملفات", file_count="multiple", elem_classes="files-out")
+                lib_refresh.click(library_gallery, lib_q, [lib_gal, lib_ids])
+                lib_q.submit(library_gallery, lib_q, [lib_gal, lib_ids])
+                lib_gal.select(library_select, lib_ids, [lib_sel, lib_view, lib_name, lib_files, lib_details])
+                lib_save.click(library_rename, [lib_sel, lib_name, lib_q], [lib_gal, lib_ids, lib_msg])
+                b_blend.click(library_open_blender, lib_sel, lib_msg)
+                b_folder.click(library_open_folder, lib_sel, lib_msg)
+                b_claude.click(library_claude_hint, lib_sel, lib_msg)
+                b_tools.click(library_to_tools, lib_sel, [bmesh_in, tabs])
+                demo.load(library_gallery, lib_q, [lib_gal, lib_ids])
 
             # ---- device ----
             with gr.Tab("💻 الجهاز"):

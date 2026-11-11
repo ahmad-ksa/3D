@@ -54,7 +54,11 @@ mcp = FastMCP(
         "list_input_images) or http(s) URLs. Generation can take 30 s to 10 min: if a tool returns a "
         "job_id, call check_job(job_id) until it is done. Each result includes a 4-view preview "
         "image so you can judge the shape; regenerate with another seed or higher quality if it is "
-        "poor. For game assets use target_faces 3000-30000 and texture=true. Text prompts must be English."
+        "poor. For game assets use target_faces 3000-30000 and texture=true. Text prompts must be English. "
+        "LIBRARY: every model ever generated is kept in the user's Studio3D library. Before generating "
+        "something new, search it with list_models; reuse models in your work by reading their file paths "
+        "(get_model) or copying them into a project folder with export_model (e.g. a Unity Assets folder, "
+        "a game or animation project). open_in_blender opens a model in a visible Blender window."
     ),
 )
 
@@ -346,17 +350,67 @@ async def check_job(job_id: str, ctx: Context = None) -> list:
     return res if isinstance(res, list) else [res]
 
 
+def _entry_line(e: dict) -> str:
+    tags = [t for t, on in (("textured", e["textured"]), ("quad", e["quad"]), ("rigged", e["rigged"])) if on]
+    faces = (e.get("stats") or {}).get("faces")
+    return (f"- id={e['id']} | name={e['name']} | kind={e['kind']}"
+            + (f" | {faces} faces" if faces else "") + (f" | {', '.join(tags)}" if tags else "")
+            + (f" | prompt={e['prompt']}" if e.get("prompt") else "")
+            + "\n  files: " + ", ".join(e["files"]))
+
+
 @mcp.tool()
-def list_recent_models(limit: int = 10) -> str:
-    """List recently generated models (newest first) with their files."""
-    if not config.OUTPUT_DIR.exists():
-        return "No models yet."
-    dirs = sorted((d for d in config.OUTPUT_DIR.iterdir() if d.is_dir()), reverse=True)[:max(1, limit)]
-    out = []
-    for d in dirs:
-        files = [p.name for p in d.iterdir() if p.suffix.lower() in MODEL_EXT | {".3mf", ".zip"}]
-        out.append(f"{d}\n  " + ", ".join(sorted(files)))
-    return "\n".join(out) or "No models yet."
+def list_models(query: str = "", limit: int = 20) -> str:
+    """Search the user's library of generated 3D models (newest first). query matches name,
+    prompt or type ('rig', 'quad'...). Use this before generating something new."""
+    from . import library
+    items = library.list_models(query, limit=max(1, min(limit, 100)), with_thumb=False)
+    if not items:
+        return "No models found." + (f" (query: {query})" if query else "")
+    return f"{len(items)} model(s):\n" + "\n".join(_entry_line(e) for e in items)
+
+
+@mcp.tool()
+def get_model(model_id: str) -> list:
+    """Details, file paths and a 4-view preview image of one library model (id from list_models,
+    or a path to one of its files)."""
+    from . import library, mesh_tools
+    from .preview import png_bytes, render_grid
+    e = library.resolve(model_id)
+    out = [_entry_line(e) + f"\n  folder: {e['folder']}"]
+    if e["preview"]:
+        out.append(Image(data=png_bytes(render_grid(mesh_tools.load_mesh(e["preview"]), 320)), format="png"))
+    return out
+
+
+@mcp.tool()
+def export_model(model_id: str, destination: str, formats: Optional[list[str]] = None,
+                 name: Optional[str] = None) -> str:
+    """Copy a library model into a folder for use in a project (e.g. 'C:/Projects/Game/Assets/Models').
+    formats: e.g. ['fbx'] or ['glb','obj']; omit to copy every format available. name: file name."""
+    from . import library
+    e = library.resolve(model_id)
+    files = library.export_to(e["id"], destination, formats, name)
+    if not files:
+        return f"Nothing copied: model {e['id']} has none of the formats {formats}. Available: {e['files']}"
+    return "Copied:\n" + "\n".join(f"- {f}" for f in files)
+
+
+@mcp.tool()
+def open_in_blender(model_id: str) -> str:
+    """Open a library model in a normal (visible) Blender window for the user to work on."""
+    from . import library
+    e = library.resolve(model_id)
+    path = library.open_in_blender(e["id"])
+    return f"Opened in Blender: {path}"
+
+
+@mcp.tool()
+def rename_model(model_id: str, name: str) -> str:
+    """Give a library model a friendly name (shown in the app and searchable)."""
+    from . import library
+    e = library.rename(library.resolve(model_id)["id"], name)
+    return f"Renamed {e['id']} -> {e['name']}"
 
 
 @mcp.tool()

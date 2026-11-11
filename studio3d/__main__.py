@@ -82,13 +82,27 @@ def main():
     log.info("GPU: %s", info)
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    demo = ui.build()
-    demo.queue(default_concurrency_limit=1)
+    app = create_app(ui.build())
     url = f"http://{config.HOST}:{args.port}"
     if not args.no_window:
         threading.Thread(target=lambda: (time.sleep(2.5), open_window(url)), daemon=True).start()
-    demo.launch(server_name=config.HOST, server_port=args.port, inbrowser=False, show_api=False,
-                allowed_paths=[str(config.OUTPUT_DIR)], favicon_path=None, share=False)
+    print(f"* Running on local URL:  {url}", flush=True)
+    import uvicorn
+    uvicorn.run(app, host=config.HOST, port=args.port, log_level="warning")
+
+
+def create_app(demo):
+    """FastAPI app: the Gradio UI at '/', the 3D viewer files at /s3d-static and the models at
+    /s3d-models (all local, works offline)."""
+    import gradio as gr
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+
+    app = FastAPI()
+    app.mount("/s3d-static", StaticFiles(directory=str(config.PACKAGE_DIR / "static")), name="s3d-static")
+    app.mount("/s3d-models", StaticFiles(directory=str(config.OUTPUT_DIR)), name="s3d-models")
+    demo.queue(default_concurrency_limit=1)
+    return gr.mount_gradio_app(app, demo, path="/", allowed_paths=[str(config.OUTPUT_DIR)], show_api=False)
 
 
 if __name__ == "__main__":

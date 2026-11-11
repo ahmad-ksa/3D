@@ -39,7 +39,9 @@ def test_mcp_roundtrip(tmp_path):
                 await s.initialize()
                 names = {t.name for t in (await s.list_tools()).tools}
                 assert {"generate_from_images", "generate_from_text", "check_job", "preview_model",
-                        "edit_model", "texture_model", "list_input_images"} <= names
+                        "edit_model", "texture_model", "list_input_images", "list_models", "get_model",
+                        "export_model", "open_in_blender", "rename_model", "quad_remesh_model",
+                        "rig_model"} <= names
                 lst = await s.call_tool("list_input_images", {})
                 assert "front.png" in lst.content[0].text
                 res = await s.call_tool("generate_from_images",
@@ -58,5 +60,18 @@ def test_mcp_roundtrip(tmp_path):
                 assert prev.content[1].type == "image"
                 ed = await s.call_tool("edit_model", {"model": glb, "target_faces": 300, "formats": ["obj"]})
                 assert "done" in ed.content[0].text
+
+                lst = (await s.call_tool("list_models", {})).content[0].text
+                assert "2 model(s)" in lst, lst
+                mid = lst.split("id=")[1].split()[0]
+                await s.call_tool("rename_model", {"model_id": mid, "name": "Treasure chest"})
+                found = (await s.call_tool("list_models", {"query": "treasure"})).content[0].text
+                assert "Treasure chest" in found
+                got = await s.call_tool("get_model", {"model_id": mid})
+                assert got.content[1].type == "image"
+                dest = tmp_path / "unity" / "Assets"
+                cp = (await s.call_tool("export_model", {"model_id": mid, "destination": str(dest),
+                                                         "formats": ["obj"]})).content[0].text
+                assert "Copied" in cp and any(p.suffix == ".obj" for p in dest.iterdir())
 
     asyncio.run(go())

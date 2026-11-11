@@ -36,21 +36,25 @@ def test_flow(tmp_path, monkeypatch):
     img = Image.new("RGB", (64, 64), "white")
     progress = lambda *a, **k: None  # noqa: E731
     opts = ["متوازن", True, True, True, False, 2, 1000, 120, 5, False, ["glb", "obj", "stl", "3mf"]]
-    preview, files, info = ui._run("multiview", {"front": img, "back": None, "left": img, "right": None},
-                                   None, *opts, progress=progress)
-    assert preview.endswith("model_textured.glb") and os.path.exists(preview)
+    view, files, info = ui._run("multiview", {"front": img, "back": None, "left": img, "right": None},
+                                None, *opts, progress=progress)
+    assert "<s3d-viewer" in view and "model_textured.glb" in view
+    preview = next(f for f in files if f.endswith("model_textured.glb"))
+    assert os.path.exists(preview)
     names = {Path(f).name for f in files}
     assert {"model.stl", "model.3mf", "model_white.glb"} <= names
     assert any(n.startswith("model_obj") or n == "model.obj" for n in names)
     loaded = trimesh.load(preview, force="mesh")
     assert np.isclose(loaded.bounding_box.extents.max(), 120, atol=0.5)
-    jobs = ui._jobs()
-    assert len(jobs) == 1 and ui.show_job(jobs[0])[0].endswith("model_textured.glb")
+    from studio3d import library
+    items = library.list_models()
+    assert len(items) == 1 and items[0]["preview"].endswith("model_textured.glb")
+    assert items[0]["thumb"] and os.path.exists(items[0]["thumb"]) and items[0]["textured"]
 
     # single image, no texture
-    preview, files, _ = ui._run("single", {"front": img}, None,
-                                "سريع", False, True, True, False, 0, 0, 0, 1, False, ["glb"], progress=progress)
-    assert preview.endswith("model.glb")
+    view, files, _ = ui._run("single", {"front": img}, None,
+                             "سريع", False, True, True, False, 0, 0, 0, 1, False, ["glb"], progress=progress)
+    assert "model.glb" in view
 
 
 def test_texture_network_failure_keeps_shape(tmp_path, monkeypatch):

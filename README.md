@@ -20,8 +20,8 @@
 | 🟦 **Topology Quad** | مربعات نظيفة (QuadriFlow عبر Blender) مع نقل الألوان — OBJ/FBX تحفظ المربعات |
 | 🦴 **هيكل عظمي تلقائي** | 19 عظمة بأسماء Unity/Mixamo + أوزان الجلد، تصدير FBX/GLB (عبر Blender) |
 | 💾 **التصدير** | GLB ، OBJ ، STL ، PLY ، 3MF ، FBX |
-| 👁️ **معاينة 3D** | تدوير وتكبير داخل البرنامج |
-| 🗂️ **السجل** | كل الأعمال محفوظة مع إعداداتها |
+| 👁️ **عارض 3D** | ألوان / بدون ألوان / أضلاع / شفاف • إضاءة أو بدون • عرض الهيكل العظمي • عدد المثلثات والنقاط والمربعات |
+| 📚 **مكتبتي** | كل المجسمات بصور مصغّرة، بحث، تسمية، فتح في Blender، فتح المجلد، إرسال لـ Claude |
 | ⚡ **3 مستويات جودة** | سريع / متوازن / عالي الجودة |
 | 🛡️ **متوافق مع Smart App Control** | لا يحتاج إطفاء الحماية (التفاصيل بالأسفل) |
 
@@ -133,7 +133,9 @@ irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex
    - «ولّد صندوق كنز Low-poly للعبة بـ 5000 مضلع وصدّره GLB»
    - «قلّل مضلعات آخر مجسم إلى 10000 وصدّره OBJ»
 
-أدوات Claude: `generate_from_images` ، `generate_from_image` ، `generate_from_text` ، `texture_model` ، `edit_model` ، `preview_model` (صورة من 4 زوايا يراها Claude ليحكم على النتيجة) ، `list_recent_models` ، `list_input_images` ، `check_job`.
+**مكتبة المجسمات لـ Claude:** Claude يعرف أن كل مجسماتك محفوظة، فيقدر يبحث فيها (`list_models`)، يشوفها (`get_model`)، وينسخها لمجلد مشروعك مثل Unity Assets (`export_model`)، أو يفتحها في Blender (`open_in_blender`). مثال: «خذ الشخصية اللي سويناها أمس بالهيكل العظمي وانسخها FBX لمجلد مشروعي».
+
+أدوات Claude: `generate_from_images` ، `generate_from_image` ، `generate_from_text` ، `texture_model` ، `edit_model` ، `preview_model` (صورة من 4 زوايا يراها Claude ليحكم على النتيجة) ، `quad_remesh_model` ، `rig_model` ، `list_models` ، `get_model` ، `export_model` ، `open_in_blender` ، `rename_model` ، `list_input_images` ، `check_job`.
 
 > البرنامج نفسه لا يحتاج أن يكون مفتوحاً — Claude يشغّله في الخلفية. لا تولّد من البرنامج ومن Claude في نفس اللحظة (سينتظر أحدهما الآخر).
 
