@@ -37,7 +37,7 @@ def check_module(name: str):
     """Import in a child process so a blocked DLL can't crash us."""
     code = f"import {name}"
     try:
-        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
         return name, False, "timeout"
     if r.returncode == 0:
@@ -87,7 +87,10 @@ def report_markdown() -> str:
     for n, err in blocked:
         lines.append(f"- ⛔ `{n}` محظورة: `{err[:200]}`")
     for n, err in other:
-        lines.append(f"- ⚠️ `{n}` لم تُحمّل (ليس بسبب الحماية): `{err[:200]}`")
+        if err == "timeout":
+            lines.append(f"- ⏳ `{n}` بطيئة في أول تحميل (ويندوز يفحص ملفاتها لأول مرة) — أعد الفحص لاحقاً.")
+        else:
+            lines.append(f"- ⚠️ `{n}` لم تُحمّل (ليس بسبب الحماية): `{err[:200]}`")
 
     files = [f for f in recent_blocks() if "python" in f.lower() or "studio3d" in f.lower()]
     if files:
