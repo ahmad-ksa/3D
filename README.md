@@ -51,6 +51,42 @@ irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex
 **للتحديث:** شغّل نفس الأمر مرة أخرى.
 **لإزالة البرنامج:** احذف المجلد `%LOCALAPPDATA%\Studio3D` والاختصار من سطح المكتب.
 
+## تنزيل النماذج (مرة واحدة)
+
+البرنامج ينزّل كل نموذج تلقائياً عند أول استخدام له. لتنزيلها **كلها مسبقاً** (≈ 15GB):
+اضغط **Win + R** ← الصق السطر التالي ← Enter، واترك النافذة حتى تظهر «اكتمل»:
+
+</div>
+
+```
+%LOCALAPPDATA%\Studio3D\Studio3D.cmd --download
+```
+
+<div dir="rtl">
+
+- لتنزيل نموذج «من نص» أيضاً (≈ 10GB إضافية): استبدل `--download` بـ `--download all`.
+- التنزيل **يكمل من حيث توقف** إذا انقطع — أعد تشغيل نفس الأمر.
+- الوقت يعتمد على سرعة الإنترنت: بسرعة 2MB/s تقريباً ساعتان.
+- مكان النماذج: `%LOCALAPPDATA%\Studio3D\models`
+
+### مصادر النماذج (رسمية — Hugging Face)
+
+| النموذج | الاستخدام | الرابط |
+|---|---|---|
+| Hunyuan3D-2mv (turbo) | من 4 صور | https://huggingface.co/tencent/Hunyuan3D-2mv |
+| Hunyuan3D-2 (turbo + VAE + Paint + Delight) | من صورة واحدة + التلوين | https://huggingface.co/tencent/Hunyuan3D-2 |
+| HunyuanDiT v1.1 Distilled | من نص (اختياري) | https://huggingface.co/Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled |
+| U²-Net (rembg) | إزالة الخلفية | https://github.com/danielgatis/rembg |
+| الكود المصدري لـ Hunyuan3D | مكتبة التوليد | https://github.com/Tencent-Hunyuan/Hunyuan3D-2 |
+
+### روابط التثبيت المستخدمة
+| المكوّن | المصدر |
+|---|---|
+| Python 3.11.9 الرسمي (موقّع) | https://www.nuget.org/packages/python/3.11.9 |
+| PyTorch 2.7.1 + CUDA 12.8 | https://download.pytorch.org/whl/cu128 |
+| بقية المكتبات | PyPI — بإصدارات مثبّتة في `requirements.txt` |
+| تعريف NVIDIA | https://www.nvidia.com/Download/index.aspx |
+
 ## الاستخدام
 
 1. افتح **Studio3D** من سطح المكتب — تفتح نافذة سوداء (اتركها مفتوحة) ثم نافذة البرنامج.
