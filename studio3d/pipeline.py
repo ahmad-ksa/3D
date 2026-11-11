@@ -73,6 +73,10 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
         mesh_tools.export(mesh_tools.normalize(white, None, True), job, "model_white", "glb")
         final = white
         warning = None
+        if opt.texture and not engine.texture_ready():
+            warning = ("تم توليد الشكل بدون تلوين: نموذج التلوين لم يكتمل تنزيله بعد. "
+                       "شغّل أمر التنزيل (Studio3D.cmd --download) ثم أعد المحاولة.")
+            opt.texture = False
         if opt.texture:
             progress(0.7, "تلوين المجسم (قد يستغرق عدة دقائق)…")
             try:

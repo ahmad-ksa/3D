@@ -12,46 +12,94 @@ from . import config, engine, mesh_tools, pipeline
 log = logging.getLogger("studio3d.ui")
 
 CSS = """
-.gradio-container {direction: rtl; font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 1400px !important;}
+.gradio-container {direction: rtl; font-family: 'Segoe UI', Tahoma, sans-serif;
+                   max-width: 100% !important; padding: 6px 14px !important;}
 .gradio-container input[type=number], .gradio-container canvas {direction: ltr;}
-#title {text-align: center;}
-.hint {opacity: .75; font-size: .9em;}
+#title {margin: 0 !important; padding: 0 !important;}
+#title h3 {margin: 2px 0 !important;}
+.hint {opacity: .7; font-size: .85em; margin: 0 !important;}
+.compact {gap: 6px !important;}
+.files-out .empty, .files-out .wrap, .files-out button.center {min-height: 56px !important; height: 56px !important;}
+.files-out table {max-height: 130px; overflow-y: auto; display: block;}
+.img-in .upload-container, .img-in .image-frame {min-height: 0 !important;}
+/* elapsed time as mm:ss (see TIMER_JS) */
+.progress-text[data-mmss] {font-size: 0 !important;}
+.progress-text[data-mmss]::after {content: attr(data-mmss); font-size: var(--text-sm);
+                                  font-variant-numeric: tabular-nums;}
 """
 
-VIEW_LABELS = {"front": "أمام (مطلوبة)", "back": "خلف", "left": "يسار", "right": "يمين"}
+# Show Gradio's "12.3/45.6s" timers as "00:12 / 00:46"
+TIMER_JS = r"""
+<script>
+(function () {
+  function mmss(v) {
+    v = Math.max(0, Math.round(parseFloat(v)));
+    var h = Math.floor(v / 3600), m = Math.floor((v % 3600) / 60), s = v % 60;
+    var t = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    return h ? h + ':' + t : t;
+  }
+  function fmt(text) {
+    return text
+      .replace(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*s\b/g, function (_, a, b) { return mmss(a) + ' / ' + mmss(b); })
+      .replace(/(\d+(?:\.\d+)?)\s*s\b/g, function (_, a) { return mmss(a); })
+      .replace('processing', 'جارٍ العمل').replace('queue', 'الانتظار');
+  }
+  function update() {
+    document.querySelectorAll('.progress-text').forEach(function (el) {
+      var raw = el.textContent || '';
+      var out = fmt(raw);
+      if (el.getAttribute('data-mmss') !== out) el.setAttribute('data-mmss', out);
+    });
+  }
+  setInterval(update, 250);
+})();
+</script>
+"""
+
+VIEW_LABELS = {"front": "أمام *", "back": "خلف", "left": "يسار", "right": "يمين"}
 
 
 # ---------------------------------------------------------------------------
 # Shared option widgets
 # ---------------------------------------------------------------------------
-def _options(show_texture=True, show_quality=True):
-    with gr.Accordion("الإعدادات", open=True):
+def _quick_options(show_texture=True):
+    with gr.Row(equal_height=True, elem_classes="compact"):
         quality = gr.Radio(list(config.PRESETS), value=config.DEFAULT_PRESET, label="الجودة",
-                           visible=show_quality,
-                           info="سريع ≈ نصف دقيقة • متوازن ≈ دقيقة • عالي الجودة ≈ عدة دقائق")
-        texture = gr.Checkbox(value=False, label="تلوين المجسم بالذكاء الاصطناعي (Texture)",
-                              visible=show_texture,
-                              info="يستغرق وقتاً إضافياً (عدة دقائق على 8GB)")
-        remove_bg = gr.Checkbox(value=True, label="إزالة الخلفية تلقائياً")
-    with gr.Accordion("تحسين المجسم", open=False):
-        clean = gr.Checkbox(value=True, label="تنظيف (إزالة الشوائب والأوجه التالفة)")
-        holes = gr.Checkbox(value=False, label="سد الثقوب")
-        smooth = gr.Slider(0, 30, value=0, step=1, label="تنعيم السطح (عدد المرات)")
-        faces = gr.Slider(0, 500000, value=0, step=1000, label="عدد المضلعات المستهدف (0 = بدون تقليل)",
-                          info="للألعاب والجوال: 5,000 – 30,000")
-        size_mm = gr.Number(value=0, label="المقاس الحقيقي لأطول ضلع بالملّيمتر (0 = بدون تغيير)",
-                            info="مفيد للطباعة ثلاثية الأبعاد")
-    with gr.Accordion("متقدم", open=False):
-        seed = gr.Number(value=1234, precision=0, label="البذرة (Seed)")
-        rand = gr.Checkbox(value=True, label="بذرة عشوائية كل مرة")
+                           scale=3, container=True)
+        with gr.Column(scale=2, min_width=160, elem_classes="compact"):
+            texture = gr.Checkbox(value=False, label="🎨 تلوين (Texture)", visible=show_texture)
+            remove_bg = gr.Checkbox(value=True, label="إزالة الخلفية")
+    return quality, texture, remove_bg
+
+
+def _more_options():
+    with gr.Accordion("⚙️ إعدادات إضافية", open=False):
+        with gr.Row(elem_classes="compact"):
+            clean = gr.Checkbox(value=True, label="تنظيف", min_width=90)
+            holes = gr.Checkbox(value=False, label="سد الثقوب", min_width=90)
+            rand = gr.Checkbox(value=True, label="بذرة عشوائية", min_width=90)
+        with gr.Row(elem_classes="compact"):
+            smooth = gr.Slider(0, 30, value=0, step=1, label="تنعيم")
+            faces = gr.Slider(0, 500000, value=0, step=1000, label="المضلعات (0 = كامل)")
+        with gr.Row(elem_classes="compact"):
+            size_mm = gr.Number(value=0, label="المقاس بالملّيمتر (0 = بدون)", min_width=120)
+            seed = gr.Number(value=1234, precision=0, label="البذرة", min_width=100)
         formats = gr.CheckboxGroup(config.EXPORT_FORMATS, value=["glb", "stl"], label="صيغ التصدير")
-    return [quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand, formats]
+    return clean, holes, smooth, faces, size_mm, seed, rand, formats
+
+
+def _generate_block(show_texture=True, label="✨ توليد المجسم"):
+    """Quick settings + button (always visible) + collapsed extra settings."""
+    quality, texture, remove_bg = _quick_options(show_texture)
+    btn = gr.Button(label, variant="primary")
+    clean, holes, smooth, faces, size_mm, seed, rand, formats = _more_options()
+    return btn, [quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand, formats]
 
 
 def _outputs():
-    model = gr.Model3D(label="المعاينة (اسحب للتدوير)", height=520, clear_color=[0.92, 0.92, 0.95, 1])
-    files = gr.File(label="ملفات التحميل", file_count="multiple")
+    model = gr.Model3D(label="المعاينة (اسحب للتدوير)", height=360, clear_color=[0.92, 0.92, 0.95, 1])
     info = gr.Markdown()
+    files = gr.File(label="ملفات التحميل", file_count="multiple", elem_classes="files-out")
     return model, files, info
 
 
@@ -170,7 +218,13 @@ def device_text():
     if not info["cuda"]:
         return ("⚠️ **لم يتم العثور على كرت NVIDIA يعمل.** التوليد سيكون بطيئاً جداً أو لن يعمل. "
                 "حدّث تعريف NVIDIA وأعد تشغيل البرنامج.")
-    return f"✅ كرت الشاشة: **{info['name']}** — الذاكرة: **{info['vram_gb']} GB**"
+    lines = [f"✅ كرت الشاشة: **{info['name']}** — الذاكرة: **{info['vram_gb']} GB**", "", "**النماذج:**"]
+    try:
+        for name, ok in engine.models_status().items():
+            lines.append(f"- {'✅' if ok else '⬇️ لم ينزل بعد'} — {name}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- تعذّر الفحص: {e}")
+    return "\n".join(lines)
 
 
 def connect_claude():
@@ -190,9 +244,9 @@ def run_sac_check():
 # ---------------------------------------------------------------------------
 def build() -> gr.Blocks:
     theme = gr.themes.Soft(primary_hue="indigo", secondary_hue="cyan")
-    with gr.Blocks(title=config.APP_TITLE, css=CSS, theme=theme, analytics_enabled=False) as demo:
-        gr.Markdown(f"# 🧊 {config.APP_TITLE}\nتوليد مجسمات ثلاثية الأبعاد بالذكاء الاصطناعي — "
-                    "**محلياً على جهازك، مجاناً، وبدون إنترنت** (بعد تنزيل النماذج أول مرة).",
+    with gr.Blocks(title=config.APP_TITLE, css=CSS, theme=theme, analytics_enabled=False,
+                   head=TIMER_JS, fill_width=True) as demo:
+        gr.Markdown(f"### 🧊 {config.APP_TITLE} <span class='hint'>— محلياً على جهازك ومجاناً</span>",
                     elem_id="title")
 
         with gr.Tabs():
@@ -200,17 +254,13 @@ def build() -> gr.Blocks:
             with gr.Tab("📸 من 4 صور"):
                 with gr.Row():
                     with gr.Column(scale=5):
-                        gr.Markdown("صوّر القطعة من **الأمام والخلف واليمين واليسار** على خلفية بسيطة "
-                                    "وإضاءة متساوية. صورة الأمام مطلوبة، والبقية تزيد الدقة.",
+                        gr.Markdown("صوّر القطعة على خلفية بسيطة. **الأمام مطلوبة** والبقية تزيد الدقة.",
                                     elem_classes="hint")
-                        with gr.Row():
-                            mv = {v: gr.Image(type="pil", image_mode="RGBA", label=VIEW_LABELS[v], height=200)
-                                  for v in ("front", "back")}
-                        with gr.Row():
-                            mv.update({v: gr.Image(type="pil", image_mode="RGBA", label=VIEW_LABELS[v],
-                                                   height=200) for v in ("left", "right")})
-                        opts = _options()
-                        btn = gr.Button("✨ توليد المجسم", variant="primary", size="lg")
+                        with gr.Row(elem_classes="compact"):
+                            mv = {v: gr.Image(type="pil", image_mode="RGBA", label=VIEW_LABELS[v], height=150,
+                                              min_width=110, elem_classes="img-in", show_download_button=False)
+                                  for v in ("front", "back", "left", "right")}
+                        btn, opts = _generate_block()
                     with gr.Column(scale=6):
                         out = _outputs()
                 btn.click(gen_multiview, [mv["front"], mv["back"], mv["left"], mv["right"], *opts], list(out))
@@ -219,9 +269,8 @@ def build() -> gr.Blocks:
             with gr.Tab("🖼️ من صورة واحدة"):
                 with gr.Row():
                     with gr.Column(scale=5):
-                        img = gr.Image(type="pil", image_mode="RGBA", label="الصورة", height=320)
-                        opts1 = _options()
-                        btn1 = gr.Button("✨ توليد المجسم", variant="primary", size="lg")
+                        img = gr.Image(type="pil", image_mode="RGBA", label="الصورة", height=240)
+                        btn1, opts1 = _generate_block()
                     with gr.Column(scale=6):
                         out1 = _outputs()
                 btn1.click(gen_single, [img, *opts1], list(out1))
@@ -230,12 +279,11 @@ def build() -> gr.Blocks:
             with gr.Tab("✍️ من نص"):
                 with gr.Row():
                     with gr.Column(scale=5):
-                        prompt = gr.Textbox(label="وصف المجسم", lines=3,
+                        prompt = gr.Textbox(label="وصف المجسم", lines=2,
                                             placeholder="A wooden chair with curved legs",
                                             info="اكتب الوصف بالإنجليزية لأفضل نتيجة. "
                                                  "يتطلب تنزيل نموذج إضافي (~10GB) أول مرة.")
-                        opts2 = _options()
-                        btn2 = gr.Button("✨ توليد المجسم", variant="primary", size="lg")
+                        btn2, opts2 = _generate_block()
                     with gr.Column(scale=6):
                         out2 = _outputs()
                 btn2.click(gen_text, [prompt, *opts2], list(out2))
@@ -248,9 +296,9 @@ def build() -> gr.Blocks:
                                     elem_classes="hint")
                         tmesh = gr.File(label="المجسم (GLB / OBJ / STL / PLY)",
                                         file_types=[".glb", ".obj", ".stl", ".ply"], type="filepath")
-                        timg = gr.Image(type="pil", image_mode="RGBA", label="الصورة المرجعية", height=260)
+                        timg = gr.Image(type="pil", image_mode="RGBA", label="الصورة المرجعية", height=200)
                         trbg = gr.Checkbox(value=True, label="إزالة الخلفية تلقائياً")
-                        btn3 = gr.Button("🎨 تلوين", variant="primary", size="lg")
+                        btn3 = gr.Button("🎨 تلوين", variant="primary")
                     with gr.Column(scale=6):
                         out3 = _outputs()
                 btn3.click(retexture, [tmesh, timg, trbg], list(out3))
@@ -281,7 +329,7 @@ def build() -> gr.Blocks:
                     hbtn = gr.Button("تحديث", scale=1)
                 with gr.Row():
                     with gr.Column(scale=6):
-                        hmodel = gr.Model3D(label="المعاينة", height=480)
+                        hmodel = gr.Model3D(label="المعاينة", height=430)
                     with gr.Column(scale=4):
                         hfiles = gr.File(label="الملفات", file_count="multiple")
                         hmeta = gr.Markdown()

@@ -47,7 +47,7 @@ def open_window(url: str):
     edge = _find_edge() if sys.platform == "win32" else None
     if edge:
         profile = config.DATA_ROOT / "window"
-        subprocess.Popen([edge, f"--app={url}", "--window-size=1400,920",
+        subprocess.Popen([edge, f"--app={url}", "--start-maximized",
                           f"--user-data-dir={profile}", "--no-first-run"])
     else:
         webbrowser.open(url)

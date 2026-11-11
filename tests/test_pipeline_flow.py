@@ -30,6 +30,7 @@ def test_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(engine, "generate_shape", fake_shape)
     monkeypatch.setattr(engine, "texture_mesh", fake_texture)
+    monkeypatch.setattr(engine, "texture_ready", lambda: True)
     monkeypatch.setattr(engine, "prepare_image", lambda img, rb: img.convert("RGBA"))
 
     img = Image.new("RGB", (64, 64), "white")
@@ -61,9 +62,45 @@ def test_texture_network_failure_keeps_shape(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("Something wrong while loading C:/models/x")
     monkeypatch.setattr(engine, "texture_mesh", boom)
+    monkeypatch.setattr(engine, "texture_ready", lambda: True)
     img = Image.new("RGB", (32, 32), "white")
     res = pipeline.run("single", {"front": img}, None,
                        pipeline.Options(texture=True, randomize=False, formats=["glb", "stl"]))
     assert res["warning"] and "الإنترنت" in res["warning"]
     assert Path(res["preview"]).exists() and res["preview"].endswith("model.glb")
     assert (Path(res["job_dir"]) / "model_white.glb").exists()
+
+
+def test_texture_not_downloaded_skips_without_downloading(tmp_path, monkeypatch):
+    from studio3d import config, engine, pipeline
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "outputs")
+    monkeypatch.setattr(engine, "generate_shape", lambda *a, **k: trimesh.creation.icosphere(3))
+    monkeypatch.setattr(engine, "prepare_image", lambda img, rb: img.convert("RGBA"))
+    monkeypatch.setattr(engine, "texture_ready", lambda: False)
+
+    def never(*a, **k):
+        raise AssertionError("must not try to texture / download")
+    monkeypatch.setattr(engine, "texture_mesh", never)
+    res = pipeline.run("single", {"front": Image.new("RGB", (32, 32))}, None,
+                       pipeline.Options(texture=True, randomize=False, formats=["glb"]))
+    assert "--download" in res["warning"] and Path(res["preview"]).exists()
+
+
+def test_texture_ready_detection(tmp_path, monkeypatch):
+    import json
+    from studio3d import engine
+    snap = tmp_path / "snap"
+    delight = snap / "hunyuan3d-delight-v2-0"
+    (delight / "unet").mkdir(parents=True)
+    (delight / "unet" / "config.json").write_text("{}")
+    (delight / "model_index.json").write_text(json.dumps({"_class_name": "X", "unet": ["diffusers", "U"]}))
+    paint = snap / "hunyuan3d-paint-v2-0-turbo" / "unet"
+    paint.mkdir(parents=True)
+    monkeypatch.setattr(engine, "_local_snapshot", lambda repo, pats: snap)
+    assert not engine.texture_ready()                      # no weights yet
+    (delight / "unet" / "diffusion_pytorch_model.safetensors").write_bytes(b"x")
+    assert not engine.texture_ready()                      # paint weights missing
+    (paint / "diffusion_pytorch_model.bin").write_bytes(b"x")
+    assert engine.texture_ready()
+    monkeypatch.setattr(engine, "_local_snapshot", lambda repo, pats: None)
+    assert not engine.texture_ready()

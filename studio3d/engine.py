@@ -40,6 +40,64 @@ def device_info() -> dict:
     return {"cuda": True, "name": p.name, "vram_gb": round(p.total_memory / 1024 ** 3, 1)}
 
 
+# ---------------------------------------------------------------------------
+# What is already downloaded? (never start a multi-GB download mid-generation)
+# ---------------------------------------------------------------------------
+def _local_snapshot(repo: str, patterns: list):
+    from huggingface_hub import snapshot_download
+    try:
+        return Path(snapshot_download(repo_id=repo, allow_patterns=patterns, local_files_only=True))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _has_weights(d: Path) -> bool:
+    return d.is_dir() and any(f.suffix in (".safetensors", ".bin") for f in d.rglob("*") if f.is_file())
+
+
+def _diffusers_ready(root: Path) -> bool:
+    """A diffusers pipeline folder is complete when every component in model_index.json has weights."""
+    idx = root / "model_index.json"
+    if not idx.exists():
+        return False
+    for name, val in json.loads(idx.read_text(encoding="utf-8")).items():
+        comp = root / name
+        if isinstance(val, list) and comp.is_dir() and (comp / "config.json").exists():
+            if not _has_weights(comp):
+                return False
+    return True
+
+
+def shape_ready(kind: str, variant: str) -> bool:
+    spec = config.SHAPE_MODELS[kind]
+    snap = _local_snapshot(spec["repo"], [f"{spec[variant]}/*"])
+    return bool(snap) and (snap / spec[variant] / "config.yaml").exists() and \
+        any((snap / spec[variant]).glob("*.safetensors"))
+
+
+def texture_ready() -> bool:
+    repo, sub = config.TEXTURE_MODEL["repo"], config.TEXTURE_MODEL["subfolder"]
+    snap = _local_snapshot(repo, ["hunyuan3d-delight-v2-0/*", f"{sub}/*"])
+    if not snap:
+        return False
+    return _diffusers_ready(snap / "hunyuan3d-delight-v2-0") and _has_weights(snap / sub)
+
+
+def text_ready() -> bool:
+    snap = _local_snapshot(config.TEXT2IMAGE_MODEL, ["*"])
+    return bool(snap) and _diffusers_ready(snap)
+
+
+def models_status() -> dict:
+    out = {}
+    for kind, label in (("multiview", "من 4 صور"), ("single", "من صورة واحدة")):
+        for variant, q in (("turbo", "سريع/متوازن"), ("full", "عالي الجودة")):
+            out[f"{label} — {q}"] = shape_ready(kind, variant)
+    out["التلوين"] = texture_ready()
+    out["من نص"] = text_ready()
+    return out
+
+
 class ModelManager:
     """Keeps at most ONE heavy model on the GPU. Switching unloads the previous one."""
 
