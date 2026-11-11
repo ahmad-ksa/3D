@@ -170,6 +170,24 @@ def rig(model_path: str) -> dict:
             "mesh": mesh_tools.load_mesh(preview)}
 
 
+def lip_sync(model_path: str, audio_path: str, strength: float = 10) -> dict:
+    """Talking animation: jaw follows the loudness of an audio file (needs a rigged model)."""
+    import shutil
+    from . import blender
+    model_path = str(model_path)
+    if not model_path.lower().endswith((".glb", ".fbx")):
+        raise ValueError("استخدم ملف GLB أو FBX فيه هيكل عظمي (من Studio3D).")
+    job = engine.new_job_dir("talk")
+    audio = job / ("voice" + Path(audio_path).suffix.lower())
+    shutil.copy2(audio_path, audio)
+    r = blender.lip_sync(model_path, audio, job, max_open_degrees=strength)
+    preview = next(f for f in r["files"] if f.endswith(".glb"))
+    info = {k: r.get(k) for k in ("frames", "seconds", "fps", "jaw_vertices")}
+    engine.save_meta(job, {"kind": "talk", "source": model_path, "audio": audio.name, "talk": info})
+    return {"job_dir": str(job), "preview": preview, "files": r["files"] + [str(audio)], "stats": info,
+            "audio": str(audio), "mesh": mesh_tools.load_mesh(preview)}
+
+
 def _is_network(e: Exception) -> bool:
     return config.is_network_error(e) or "Something wrong while loading" in str(e)
 

@@ -1,0 +1,209 @@
+"""Talking character: jaw bone + mouth animation driven by an audio file (runs inside Blender).
+
+1. Import a rigged model (from auto_rig.py: Head/Neck bones).
+2. Add a "Jaw" bone under Head if missing, and give the lower face smooth jaw weights
+   (taken from the Head weights, so nothing else changes).
+3. Read the audio (wav/mp3/ogg/flac via Blender's aud module, WAV fallback), compute the
+   loudness per frame, smooth it and key the jaw opening.
+4. Export GLB + FBX with the animation, and a .blend with the sound in the timeline.
+"""
+import math
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bpy  # noqa: E402
+from mathutils import Vector  # noqa: E402
+
+import _common as C  # noqa: E402
+
+
+def import_rigged(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".glb", ".gltf"):
+        bpy.ops.import_scene.gltf(filepath=path)
+    elif ext == ".fbx":
+        bpy.ops.import_scene.fbx(filepath=path)
+    else:
+        raise ValueError("Use the rigged GLB or FBX made by Studio3D")
+    rig = next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
+    meshes = [o for o in bpy.data.objects if o.type == "MESH" and o.find_armature() == rig]
+    if rig is None or not meshes or "Head" not in rig.data.bones:
+        raise RuntimeError("This model has no Studio3D skeleton. Add a skeleton first (rig).")
+    # drop bone-shape helpers the glTF importer may create
+    for o in list(bpy.data.objects):
+        if o.type == "MESH" and o not in meshes:
+            bpy.data.objects.remove(o, do_unlink=True)
+    return rig, max(meshes, key=lambda o: len(o.data.vertices))
+
+
+def face_frame(rig, mesh):
+    """Head measurements in world space: mouth height, face front, width."""
+    head = rig.data.bones["Head"]
+    neck = rig.data.bones.get("Neck")
+    mw = mesh.matrix_world
+    hz = (rig.matrix_world @ head.head_local).z
+    cz = (rig.matrix_world @ (neck.head_local if neck else head.head_local)).z
+    cx = (rig.matrix_world @ head.head_local).x
+    verts = [mw @ v.co for v in mesh.data.vertices]
+    top = max(v.z for v in verts)
+    hh = max(top - cz, 1e-6)
+    # face region: slice around the lower head
+    band = [v for v in verts if hz - 0.05 * hh <= v.z <= hz + 0.35 * hh]
+    xs = [v.x for v in band] or [cx]
+    half_w = max(abs(max(xs) - cx), abs(min(xs) - cx)) or 0.1 * hh
+    narrow = [v for v in band if abs(v.x - cx) < 0.35 * half_w]
+    front_y = min(v.y for v in narrow) if narrow else min(v.y for v in band)
+    back_y = max(v.y for v in narrow) if narrow else max(v.y for v in band)
+    mouth_z = hz + 0.10 * hh
+    return {"cx": cx, "mouth_z": mouth_z, "chin_z": hz - 0.02 * hh, "hh": hh, "half_w": half_w,
+            "front_y": front_y, "back_y": back_y}
+
+
+def add_jaw(rig, f):
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = rig.data.edit_bones
+    if "Jaw" not in eb:
+        inv = rig.matrix_world.inverted()
+        depth = f["back_y"] - f["front_y"]
+        hinge = Vector((f["cx"], f["front_y"] + 0.55 * depth, f["mouth_z"] + 0.04 * f["hh"]))
+        tip = Vector((f["cx"], f["front_y"] + 0.05 * depth, f["mouth_z"] - 0.06 * f["hh"]))
+        b = eb.new("Jaw")
+        b.head, b.tail = inv @ hinge, inv @ tip
+        b.parent = eb["Head"]
+        b.use_connect = False
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def smoothstep(e0, e1, x):
+    t = max(0.0, min(1.0, (x - e0) / ((e1 - e0) or 1e-9)))
+    return t * t * (3 - 2 * t)
+
+
+def jaw_weights(mesh, f):
+    """Lower face follows the jaw: below the mouth line, front half of the head."""
+    mw = mesh.matrix_world
+    head_g = mesh.vertex_groups.get("Head")
+    jaw_g = mesh.vertex_groups.get("Jaw") or mesh.vertex_groups.new(name="Jaw")
+    depth = f["back_y"] - f["front_y"]
+    count = 0
+    for v in mesh.data.vertices:
+        p = mw @ v.co
+        w_head = 0.0
+        if head_g:
+            for g in v.groups:
+                if g.group == head_g.index:
+                    w_head = g.weight
+        if w_head <= 0:
+            continue
+        down = smoothstep(f["mouth_z"] + 0.02 * f["hh"], f["mouth_z"] - 0.05 * f["hh"], p.z)
+        up = smoothstep(f["chin_z"] - 0.12 * f["hh"], f["chin_z"], p.z)  # not into the neck
+        front = smoothstep(f["front_y"] + 0.45 * depth, f["front_y"] + 0.2 * depth, p.y)
+        side = smoothstep(0.55 * f["half_w"], 0.25 * f["half_w"], abs(p.x - f["cx"]))
+        w = down * up * front * side
+        if w > 0.01:
+            jaw_g.add([v.index], w * w_head, "REPLACE")
+            head_g.add([v.index], (1 - w) * w_head, "REPLACE")
+            count += 1
+    return count
+
+
+def read_loudness(path, fps):
+    """Loudness per animation frame, 0..1."""
+    import numpy as np
+    samples, rate = None, None
+    try:
+        import aud
+        snd = aud.Sound(path)
+        rate = int(snd.specs[0])
+        samples = np.asarray(snd.data(), dtype=np.float32)
+    except Exception:  # noqa: BLE001
+        import wave
+        with wave.open(path, "rb") as wf:
+            rate = wf.getframerate()
+            ch = wf.getnchannels()
+            width = wf.getsampwidth()
+            raw = wf.readframes(wf.getnframes())
+        dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[width]
+        samples = np.frombuffer(raw, dtype=dtype).astype(np.float32).reshape(-1, ch)
+        if width == 1:
+            samples -= 128
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    hop = max(1, int(rate / fps))
+    n = len(samples) // hop
+    if n == 0:
+        raise RuntimeError("The audio file is empty or too short")
+    rms = np.sqrt((samples[: n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    ref = np.percentile(rms, 95) or 1.0
+    level = np.clip(rms / ref, 0, 1)
+    gate = 0.08  # silence -> closed mouth
+    level = np.clip((level - gate) / (1 - gate), 0, 1)
+    out, cur = [], 0.0
+    for x in level:  # fast open, slower close
+        cur = cur + (x - cur) * (0.65 if x > cur else 0.35)
+        out.append(float(cur))
+    return out, len(samples) / rate
+
+
+def animate(rig, levels, fps, max_deg):
+    scene = bpy.context.scene
+    scene.render.fps = fps
+    scene.frame_start = 1
+    scene.frame_end = len(levels) + 1
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="POSE")
+    pb = rig.pose.bones["Jaw"]
+    pb.rotation_mode = "XYZ"
+    for i, lv in enumerate(levels):
+        pb.rotation_euler = (math.radians(max_deg) * lv, 0, 0)
+        pb.keyframe_insert("rotation_euler", frame=i + 1)
+    pb.rotation_euler = (0, 0, 0)
+    pb.keyframe_insert("rotation_euler", frame=len(levels) + 1)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    if rig.animation_data and rig.animation_data.action:
+        rig.animation_data.action.name = "Talk"
+
+
+def main(args):
+    C.reset_scene()
+    rig, mesh = import_rigged(args["input"])
+    f = face_frame(rig, mesh)
+    add_jaw(rig, f)
+    n = jaw_weights(mesh, f)
+    fps = int(args.get("fps", 30))
+    levels, seconds = read_loudness(args["audio"], fps)
+    animate(rig, levels, fps, float(args.get("max_open_degrees", 10)))
+
+    # sound in the timeline for preview/render inside Blender
+    scene = bpy.context.scene
+    try:
+        if not scene.sequence_editor:
+            scene.sequence_editor_create()
+        seqs = getattr(scene.sequence_editor, "strips", None) or scene.sequence_editor.sequences
+        seqs.new_sound("voice", args["audio"], 1, 1)
+    except Exception:  # noqa: BLE001
+        pass
+
+    out, name = args["outdir"], args.get("name", "model_talking")
+    os.makedirs(out, exist_ok=True)
+    files = []
+    C.select_only(rig, mesh)
+    mesh.select_set(True)
+    glb = os.path.join(out, f"{name}.glb")
+    bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_animations=True)
+    files.append(glb)
+    fbx = os.path.join(out, f"{name}.fbx")
+    bpy.ops.export_scene.fbx(filepath=fbx, use_selection=True, add_leaf_bones=False, bake_anim=True,
+                             bake_anim_use_all_actions=False, path_mode="COPY", embed_textures=True)
+    files.append(fbx)
+    blend = os.path.join(out, f"{name}.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=blend, copy=True)
+    files.append(blend)
+    return {"files": files, "jaw_vertices": n, "frames": len(levels), "seconds": round(seconds, 2),
+            "fps": fps}
+
+
+if __name__ == "__main__":
+    C.run(main)

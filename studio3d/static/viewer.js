@@ -39,6 +39,7 @@ class S3DViewer extends HTMLElement {
         <button data-t="light" class="on" title="الإضاءة">💡 إضاءة</button>
         <button data-t="bones" title="الهيكل العظمي">🦴 هيكل</button>
         <button data-t="spin" title="دوران تلقائي">🔄 دوران</button>
+        <button data-t="play" title="تشغيل الحركة" style="display:none">▶️ تشغيل</button>
         <button data-t="reset" title="إعادة الكاميرا">⟲</button>
       </div>
       <div class="stats"></div><div class="msg">…</div>`;
@@ -70,6 +71,7 @@ class S3DViewer extends HTMLElement {
     root.querySelectorAll('button[data-t]').forEach(b => b.onclick = () => {
       const t = b.dataset.t;
       if (t === 'reset') return this.frame();
+      if (t === 'play') return this.togglePlay(b);
       if (t === 'spin') { this.controls.autoRotate = !this.controls.autoRotate; b.classList.toggle('on', this.controls.autoRotate); }
       if (t === 'light') { this.light = !this.light; b.classList.toggle('on', this.light); this.applyMode(); }
       if (t === 'bones') { this.bones = !this.bones; b.classList.toggle('on', this.bones); if (this.skel) this.skel.visible = this.bones; }
@@ -77,13 +79,35 @@ class S3DViewer extends HTMLElement {
 
     this._ro = new ResizeObserver(() => this.resize());
     this._ro.observe(this);
-    const loop = () => { this._raf = requestAnimationFrame(loop); this.controls.update(); r.render(this.scene, this.camera); };
+    this.clock = new THREE.Clock();
+    const loop = () => {
+      this._raf = requestAnimationFrame(loop);
+      const dt = this.clock.getDelta();
+      if (this.mixer && this.playing) {
+        // follow the audio clock when there is sound, so lips stay in sync
+        if (this.audio && !this.audio.paused) this.mixer.setTime(this.audio.currentTime);
+        else this.mixer.update(dt);
+      }
+      this.controls.update(); r.render(this.scene, this.camera);
+    };
     loop();
     this.load(this.getAttribute('src'));
   }
 
+  togglePlay(btn) {
+    if (!this.mixer) return;
+    this.playing = !this.playing;
+    btn.classList.toggle('on', this.playing);
+    btn.textContent = this.playing ? '⏸️ إيقاف' : '▶️ تشغيل';
+    if (this.audio) {
+      if (this.playing) { this.audio.currentTime = 0; this.mixer.setTime(0); this.audio.play().catch(() => {}); }
+      else this.audio.pause();
+    }
+  }
+
   disconnectedCallback() {
     cancelAnimationFrame(this._raf);
+    this.audio && this.audio.pause();
     this._ro && this._ro.disconnect();
     this.clear();
     this.renderer && (this.renderer.dispose(), this.renderer.forceContextLoss());
@@ -127,6 +151,17 @@ class S3DViewer extends HTMLElement {
         this.meshes.push(o);
       });
       this.scene.add(this.model);
+      const playBtn = this.shadowRoot.querySelector('button[data-t="play"]');
+      this.mixer = null; this.playing = false;
+      if (g.animations && g.animations.length) {
+        this.mixer = new THREE.AnimationMixer(this.model);
+        g.animations.forEach(a => this.mixer.clipAction(a).play());
+        this.mixer.setTime(0);
+        const a = this.getAttribute('audio');
+        this.audio = a ? new Audio(a) : null;
+        if (this.audio) this.audio.onended = () => { if (this.playing) this.togglePlay(playBtn); };
+        playBtn.style.display = '';
+      } else { playBtn.style.display = 'none'; this.audio = null; }
       if (skinned) {
         this.skel = new THREE.SkeletonHelper(this.model);
         this.skel.visible = this.bones;

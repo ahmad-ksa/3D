@@ -40,7 +40,7 @@ def test_mcp_roundtrip(tmp_path):
                 names = {t.name for t in (await s.list_tools()).tools}
                 assert {"generate_from_images", "generate_from_text", "check_job", "preview_model",
                         "edit_model", "texture_model", "list_input_images", "list_models", "get_model",
-                        "export_model", "open_in_blender", "rename_model", "quad_remesh_model",
+                        "export_model", "open_in_blender", "rename_model", "quad_remesh_model", "lip_sync_model",
                         "rig_model"} <= names
                 lst = await s.call_tool("list_input_images", {})
                 assert "front.png" in lst.content[0].text

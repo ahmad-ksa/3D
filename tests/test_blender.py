@@ -75,3 +75,30 @@ def test_missing_blender_gives_clear_warning(tmp_path, monkeypatch):
     res = pipeline.run("single", {"front": Image.new("RGB", (32, 32))}, None,
                        pipeline.Options(randomize=False, formats=["glb"], topology="quad", rig=True))
     assert "Blender" in res["warning"] and Path(res["preview"]).exists()
+
+
+def _wav(path, seconds=1.5):
+    import wave
+    rate = 16000
+    t = np.arange(int(rate * seconds)) / rate
+    sig = (0.5 * np.clip(np.sin(2 * np.pi * 3 * t), 0, 1) * np.sin(2 * np.pi * 200 * t) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(sig.tobytes())
+
+
+def test_lip_sync(tmp_path, monkeypatch):
+    from studio3d import config, pipeline
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "outputs")
+    src = tmp_path / "human.glb"
+    humanoid().export(src)
+    r = blender.auto_rig(str(src), tmp_path / "r")
+    rigged = next(f for f in r["files"] if f.endswith(".glb"))
+    wav = tmp_path / "v.wav"
+    _wav(wav)
+    res = pipeline.lip_sync(rigged, str(wav))
+    names = {Path(f).name for f in res["files"]}
+    assert {"model_talking.glb", "model_talking.fbx", "model_talking.blend", "voice.wav"} <= names
+    assert res["stats"]["frames"] == 45 and res["stats"]["jaw_vertices"] > 0

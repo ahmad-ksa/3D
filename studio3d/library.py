@@ -16,10 +16,10 @@ from pathlib import Path
 from . import config
 
 KIND_LABELS = {"multiview": "من 4 صور", "single": "من صورة", "text": "من نص", "retexture": "تلوين",
-               "edit": "تعديل", "quad": "Quad", "rig": "هيكل عظمي"}
+               "edit": "تعديل", "quad": "Quad", "rig": "هيكل عظمي", "talk": "يتكلم"}
 # best file to show, in order
-PREVIEW_ORDER = ["model_rigged.glb", "model_quad.glb", "model_textured.glb", "model.glb", "model_white.glb"]
-MODEL_EXT = {".glb", ".obj", ".fbx", ".stl", ".ply", ".3mf", ".zip"}
+PREVIEW_ORDER = ["model_talking.glb", "model_rigged.glb", "model_quad.glb", "model_textured.glb", "model.glb", "model_white.glb"]
+MODEL_EXT = {".glb", ".obj", ".fbx", ".stl", ".ply", ".3mf", ".zip", ".blend", ".wav", ".mp3", ".ogg", ".flac"}
 
 
 def _dir(model_id: str) -> Path:
@@ -93,6 +93,7 @@ def entry(d: Path, with_thumb: bool = True) -> dict:
         "thumb": str(ensure_thumb(d)) if with_thumb else None,
         "files": files,
         "folder": str(d),
+        "audio": next((str(p) for p in d.glob("voice.*")), None),
     }
 
 

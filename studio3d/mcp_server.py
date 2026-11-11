@@ -341,6 +341,18 @@ async def rig_model(model: str, ctx: Context = None) -> list:
 
 
 @mcp.tool()
+async def lip_sync_model(model: str, audio: str, strength_degrees: float = 10, ctx: Context = None) -> list:
+    """Make a rigged character talk: adds a jaw bone and animates the mouth from an audio file
+    (wav/mp3/ogg/flac; path, inbox file name or URL). The model must have a Studio3D skeleton
+    (rig_model first). Outputs GLB + FBX with the animation and a .blend with the sound."""
+    path = str(_resolve_file(model, {".glb", ".fbx"}))
+    aud = str(_resolve_file(audio, {".wav", ".mp3", ".ogg", ".flac"}))
+    from . import pipeline
+    job = _start("talk", lambda pr: pipeline.lip_sync(path, aud, strength_degrees))
+    return await _wait(job, ctx)
+
+
+@mcp.tool()
 async def check_job(job_id: str, ctx: Context = None) -> list:
     """Wait for / get the result of a running generation job."""
     job = JOBS.get(job_id)

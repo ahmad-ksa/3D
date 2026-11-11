@@ -21,6 +21,8 @@ CSS = """
 .compact {gap: 6px !important;}
 .files-out .empty, .files-out .wrap, .files-out button.center {min-height: 56px !important; height: 56px !important;}
 .files-out table {max-height: 130px; overflow-y: auto; display: block;}
+.audio-in .upload-container, .audio-in .wrap {min-height: 0 !important;}
+.audio-in {max-height: 170px;}
 .img-in .upload-container, .img-in .image-frame {min-height: 0 !important;}
 /* elapsed time as mm:ss (see TIMER_JS) */
 .progress-text[data-mmss] {font-size: 0 !important;}
@@ -106,7 +108,16 @@ def _generate_block(show_texture=True, label="✨ توليد المجسم"):
                  topology, rig]
 
 
-def viewer_html(path=None, stats=None, height=360) -> str:
+def _served(path) -> str:
+    p = Path(path).resolve()
+    try:
+        rel = p.relative_to(config.OUTPUT_DIR.resolve()).as_posix()
+        return f"/s3d-models/{rel}?v={int(p.stat().st_mtime)}"
+    except ValueError:
+        return f"/gradio_api/file={p.as_posix()}"
+
+
+def viewer_html(path=None, stats=None, height=360, audio=None) -> str:
     """HTML for our three.js viewer (colours / clay / wireframe / x-ray / lighting / skeleton)."""
     import html
     import json as _json
@@ -119,7 +130,8 @@ def viewer_html(path=None, stats=None, height=360) -> str:
         except ValueError:
             src = f"/gradio_api/file={p.as_posix()}"
     info = html.escape(_json.dumps({"quads": (stats or {}).get("quads", 0)}), quote=True)
-    return f'<s3d-viewer src="{html.escape(src)}" info="{info}" style="--s3d-h:{height}px"></s3d-viewer>'
+    aud = f' audio="{html.escape(_served(audio))}"' if audio else ""
+    return f'<s3d-viewer src="{html.escape(src)}" info="{info}"{aud} style="--s3d-h:{height}px"></s3d-viewer>'
 
 
 def _outputs():
@@ -240,6 +252,29 @@ def blender_tool(mesh_file, do_quad, quad_faces, do_rig, progress=gr.Progress())
     return viewer_html(preview, last_stats), files, "✅ " + "  \n".join(notes)
 
 
+def talk_tool(mesh_file, audio_file, strength, progress=gr.Progress()):
+    if mesh_file is None or audio_file is None:
+        raise gr.Error("اختر مجسماً فيه هيكل عظمي وملف صوت.")
+    try:
+        progress(0.3, desc="تحريك الفم مع الصوت عبر Blender…")
+        r = pipeline.lip_sync(mesh_file, audio_file, float(strength))
+    except Exception as e:  # noqa: BLE001
+        log.error(traceback.format_exc())
+        raise gr.Error(f"تعذّر: {str(e)[:400]}")
+    st = r["stats"]
+    return (viewer_html(r["preview"], audio=r["audio"]), r["files"],
+            f"✅ {st['seconds']} ثانية • {st['frames']} إطار — اضغط ▶️ تشغيل في العارض")
+
+
+def last_rigged():
+    from . import library
+    for e in library.list_models(with_thumb=False):
+        for f in e["files"]:
+            if f.endswith("model_rigged.glb"):
+                return f
+    return None
+
+
 def last_model():
     for name in _jobs():
         d = config.OUTPUT_DIR / name
@@ -294,7 +329,7 @@ def library_select(ids, evt: gr.SelectData):
     details = (f"**{e['name']}**  \n{tags}  \n"
                f"<span class='hint'>{st.get('faces', '?'):,} وجه • المعرّف `{e['id']}`</span>"
                if isinstance(st.get("faces"), int) else f"**{e['name']}**  \n{tags}")
-    return e["id"], viewer_html(e["preview"], st, height=420), e["name"], e["files"], details
+    return e["id"], viewer_html(e["preview"], st, height=420, audio=e.get("audio")), e["name"], e["files"], details
 
 
 def library_rename(model_id, name, query):
@@ -470,6 +505,24 @@ def build() -> gr.Blocks:
                         bout = _outputs()
                 use_last.click(last_model, None, bmesh_in)
                 bbtn.click(blender_tool, [bmesh_in, bq, bqf, br], list(bout))
+
+            # ---- talk ----
+            with gr.Tab("👄 كلام"):
+                with gr.Row():
+                    with gr.Column(scale=5):
+                        gr.Markdown("الشخصية تحرّك فمها مع الصوت (تحتاج هيكل عظمي من Studio3D).",
+                                    elem_classes="hint")
+                        tmesh2 = gr.File(label="المجسم بالهيكل العظمي (GLB / FBX)", file_types=[".glb", ".fbx"],
+                                         type="filepath", height=110)
+                        last_r = gr.Button("استخدم آخر شخصية بهيكل عظمي", size="sm")
+                        taudio = gr.Audio(label="الصوت (wav / mp3) — ارفع ملفاً أو سجّل بصوتك", type="filepath",
+                                          sources=["upload", "microphone"], elem_classes="audio-in")
+                        tstr = gr.Slider(4, 20, value=10, step=1, label="قوة فتح الفم (درجات)")
+                        tbtn = gr.Button("👄 تحريك الفم", variant="primary")
+                    with gr.Column(scale=6):
+                        tout = _outputs()
+                last_r.click(last_rigged, None, tmesh2)
+                tbtn.click(talk_tool, [tmesh2, taudio, tstr], list(tout))
 
             # ---- library ----
             with gr.Tab("📚 مكتبتي"):
