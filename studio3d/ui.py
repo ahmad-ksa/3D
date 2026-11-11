@@ -1,14 +1,13 @@
 """Arabic (RTL) Gradio interface."""
 from __future__ import annotations
 
-import json
 import logging
 import traceback
 from pathlib import Path
 
 import gradio as gr
 
-from . import config, engine, mesh_tools
+from . import config, engine, mesh_tools, pipeline
 
 log = logging.getLogger("studio3d.ui")
 
@@ -61,75 +60,20 @@ def _outputs():
 # ---------------------------------------------------------------------------
 def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, smooth, faces,
          size_mm, seed, rand, formats, progress):
-    seed = engine.resolve_seed(seed, rand)
-    job = engine.new_job_dir(kind)
-    meta = {"kind": kind, "prompt": prompt, "quality": quality, "seed": seed, "texture": texture,
-            "post": {"clean": clean, "holes": holes, "smooth": smooth, "faces": faces, "size_mm": size_mm}}
-
-    with engine.MANAGER.lock:
-        try:
-            # 1) text -> image
-            if kind == "text":
-                progress(0.05, desc="توليد صورة من النص…")
-                img = engine.text_to_image(prompt, seed)
-                inputs = {"front": img}
-
-            # 2) background removal
-            progress(0.15, desc="إزالة الخلفية…")
-            prepared = {}
-            for view, img in inputs.items():
-                if img is None:
-                    continue
-                img.save(job / f"input_{view}.png")
-                prepared[view] = engine.prepare_image(img, remove_bg)
-                prepared[view].save(job / f"clean_{view}.png")
-
-            # 3) shape
-            progress(0.25, desc="توليد الشكل ثلاثي الأبعاد…")
-            if kind == "multiview":
-                mesh = engine.generate_shape(prepared, "multiview", quality, seed)
-            else:
-                mesh = engine.generate_shape(prepared["front"], "single", quality, seed)
-
-            # 4) clean-up / edit (before texturing so the UVs stay valid)
-            progress(0.6, desc="تحسين المجسم…")
-            mesh = mesh_tools.process(mesh, do_clean=clean, target_faces=int(faces or 0),
-                                      smooth_iters=int(smooth or 0), holes=holes,
-                                      size_mm=0, on_ground=False)
-            white = mesh
-
-            # 5) texture
-            final = white
-            if texture:
-                progress(0.7, desc="تلوين المجسم (قد يستغرق عدة دقائق)…")
-                final = engine.texture_mesh(white, prepared["front"])
-
-            # 6) size / ground + export
-            progress(0.95, desc="التصدير…")
-            white = mesh_tools.normalize(white, float(size_mm or 0) or None, True)
-            if final is not white:
-                final = mesh_tools.normalize(final, float(size_mm or 0) or None, True)
-            else:
-                final = white
-            preview = mesh_tools.export(final, job, "model_textured" if texture else "model", "glb")
-            files = [preview]
-            for fmt in formats or []:
-                if fmt == "glb":
-                    continue
-                files.append(mesh_tools.export(final, job, "model", fmt))
-            if texture:
-                files.append(mesh_tools.export(white, job, "model_white", "glb"))
-
-            st = mesh_tools.stats(final)
-            meta["stats"] = st
-            engine.save_meta(job, meta)
-        except Exception as e:  # noqa: BLE001
-            log.error(traceback.format_exc())
-            raise gr.Error(_friendly_error(e))
-
-    info = (f"✅ تم — **{st['faces']:,}** مضلع • **{st['vertices']:,}** نقطة • البذرة `{seed}`  \n"
-            f"<span class='hint'>محفوظ في: {job}</span>")
-    return preview, files, info
+    opt = pipeline.Options(quality=quality, texture=bool(texture), remove_bg=bool(remove_bg),
+                           clean=bool(clean), holes=bool(holes), smooth=int(smooth or 0),
+                           faces=int(faces or 0), size_mm=float(size_mm or 0),
+                           seed=int(seed if seed is not None else -1), randomize=bool(rand),
+                           formats=list(formats or []))
+    try:
+        res = pipeline.run(kind, inputs, prompt, opt, lambda p, d: progress(p, desc=d))
+    except Exception as e:  # noqa: BLE001
+        log.error(traceback.format_exc())
+        raise gr.Error(_friendly_error(e))
+    st = res["stats"]
+    info = (f"✅ تم — **{st['faces']:,}** مضلع • **{st['vertices']:,}** نقطة • البذرة `{res['seed']}`  \n"
+            f"<span class='hint'>محفوظ في: {res['job_dir']}</span>")
+    return res["preview"], res["files"], info
 
 
 def _friendly_error(e: Exception) -> str:
@@ -170,37 +114,22 @@ def gen_text(prompt, *opts, progress=gr.Progress(track_tqdm=True)):
 def retexture(mesh_file, image, remove_bg, progress=gr.Progress(track_tqdm=True)):
     if mesh_file is None or image is None:
         raise gr.Error("ارفع المجسم وصورة مرجعية.")
-    job = engine.new_job_dir("retexture")
-    with engine.MANAGER.lock:
-        try:
-            progress(0.1, desc="تجهيز…")
-            mesh = mesh_tools.load_mesh(mesh_file)
-            img = engine.prepare_image(image, remove_bg)
-            progress(0.3, desc="تلوين المجسم…")
-            out = engine.texture_mesh(mesh, img)
-            path = mesh_tools.export(out, job, "model_textured", "glb")
-            obj = mesh_tools.export(out, job, "model_textured", "obj")
-            engine.save_meta(job, {"kind": "retexture", "stats": mesh_tools.stats(out)})
-        except Exception as e:  # noqa: BLE001
-            log.error(traceback.format_exc())
-            raise gr.Error(_friendly_error(e))
-    return path, [path, obj], f"✅ تم التلوين — محفوظ في {job}"
+    try:
+        res = pipeline.retexture(mesh_file, image, remove_bg, lambda p, d: progress(p, desc=d))
+    except Exception as e:  # noqa: BLE001
+        log.error(traceback.format_exc())
+        raise gr.Error(_friendly_error(e))
+    return res["preview"], res["files"], f"✅ تم التلوين — محفوظ في {res['job_dir']}"
 
 
 def edit_mesh(mesh_file, clean, holes, smooth, faces, size_mm, formats):
     if mesh_file is None:
         raise gr.Error("ارفع ملف مجسم (GLB / OBJ / STL / PLY).")
-    job = engine.new_job_dir("edit")
-    mesh = mesh_tools.load_mesh(mesh_file)
-    before = mesh_tools.stats(mesh)
-    mesh = mesh_tools.process(mesh, do_clean=clean, target_faces=int(faces or 0),
-                              smooth_iters=int(smooth or 0), holes=holes,
-                              size_mm=float(size_mm or 0), on_ground=True)
-    after = mesh_tools.stats(mesh)
-    preview = mesh_tools.export(mesh, job, "model", "glb")
-    files = [preview] + [mesh_tools.export(mesh, job, "model", f) for f in formats or [] if f != "glb"]
-    info = f"قبل: {before['faces']:,} مضلع ← بعد: **{after['faces']:,}** مضلع • المقاس: {after['size']}"
-    return preview, files, info
+    res = pipeline.edit(mesh_file, clean=clean, holes=holes, smooth=smooth, faces=faces,
+                        size_mm=size_mm, formats=formats)
+    b, a = res["before"], res["stats"]
+    info = f"قبل: {b['faces']:,} مضلع ← بعد: **{a['faces']:,}** مضلع • المقاس: {a['size']}"
+    return res["preview"], res["files"], info
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +168,13 @@ def device_text():
         return ("⚠️ **لم يتم العثور على كرت NVIDIA يعمل.** التوليد سيكون بطيئاً جداً أو لن يعمل. "
                 "حدّث تعريف NVIDIA وأعد تشغيل البرنامج.")
     return f"✅ كرت الشاشة: **{info['name']}** — الذاكرة: **{info['vram_gb']} GB**"
+
+
+def connect_claude():
+    from . import claude_setup
+    done = [claude_setup.update(p) for p in claude_setup.config_paths()]
+    return ("✅ تم الربط مع Claude:\n" + "\n".join(f"- `{d}`" for d in done) +
+            "\n\nأغلق تطبيق Claude بالكامل (من أيقونة شريط المهام ← Quit) ثم افتحه من جديد.")
 
 
 def run_sac_check():
@@ -355,6 +291,8 @@ def build() -> gr.Blocks:
                 gr.Markdown(f"مجلد النماذج: `{config.MODELS_DIR}`  \nمجلد النتائج: `{config.OUTPUT_DIR}`")
                 sac_btn = gr.Button("🛡️ فحص الحماية (Smart App Control)")
                 sac_out = gr.Markdown()
+                claude_btn = gr.Button("🤖 ربط البرنامج مع تطبيق Claude")
+                claude_btn.click(connect_claude, None, sac_out)
                 unload = gr.Button("تفريغ ذاكرة كرت الشاشة")
                 unload.click(lambda: (engine.MANAGER.unload(), "تم التفريغ ✅")[1], None, sac_out)
                 sac_btn.click(run_sac_check, None, sac_out)

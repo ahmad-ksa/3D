@@ -73,6 +73,22 @@ irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex
 
 (أول تشغيل لكل نوع أبطأ بسبب تنزيل النموذج وتحميله.)
 
+## 🤖 الربط مع Claude (تطبيق الكمبيوتر)
+
+البرنامج يعمل كـ **خادم MCP**، فيقدر Claude يولّد ويعدّل المجسمات بنفسه على جهازك.
+
+1. ثبّت تطبيق Claude للكمبيوتر وسجّل دخولك.
+2. الربط يتم تلقائياً أثناء تثبيت Studio3D. إذا ثبّتّ Claude **بعد** Studio3D: افتح Studio3D ← تبويب «الجهاز» ← **«ربط البرنامج مع تطبيق Claude»**.
+3. أغلق Claude **بالكامل** (أيقونة شريط المهام ← Quit) ثم افتحه.
+4. ضع صورك في مجلد **الصور ← Studio3D** (`Pictures\Studio3D`) واكتب لـ Claude مثلاً:
+   - «ولّد مجسم من الصور front.jpg و back.jpg و left.jpg و right.jpg بجودة عالية مع تلوين»
+   - «ولّد صندوق كنز Low-poly للعبة بـ 5000 مضلع وصدّره GLB»
+   - «قلّل مضلعات آخر مجسم إلى 10000 وصدّره OBJ»
+
+أدوات Claude: `generate_from_images` ، `generate_from_image` ، `generate_from_text` ، `texture_model` ، `edit_model` ، `preview_model` (صورة من 4 زوايا يراها Claude ليحكم على النتيجة) ، `list_recent_models` ، `list_input_images` ، `check_job`.
+
+> البرنامج نفسه لا يحتاج أن يكون مفتوحاً — Claude يشغّله في الخلفية. لا تولّد من البرنامج ومن Claude في نفس اللحظة (سينتظر أحدهما الآخر).
+
 ## 🛡️ التحكم الذكي في التطبيقات (Smart App Control)
 
 البرنامج مصمم ليعمل **والحماية مفعّلة**:

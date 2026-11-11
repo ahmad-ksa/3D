@@ -122,6 +122,13 @@ try {
 if (-not $made) { Copy-Item $launcher (Join-Path $desktop 'Studio3D.cmd') -Force }
 Write-Host "Desktop shortcut created: $desktop"
 
+# Connect to the Claude desktop app (MCP) so Claude can generate 3D models itself
+$env:PYTHONPATH = $App
+Push-Location $App
+& $Py -m studio3d.claude_setup
+Pop-Location
+New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE 'Pictures\Studio3D') | Out-Null
+
 # --- 6. Smart App Control check ---------------------------------------------
 Step 6 'Smart App Control compatibility check'
 $env:PYTHONPATH = $App
