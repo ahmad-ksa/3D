@@ -29,6 +29,9 @@ os.environ.setdefault("HY3DGEN_MODELS", str(MODELS_DIR / "hy3dgen"))
 os.environ.setdefault("HF_HOME", str(MODELS_DIR / "huggingface"))
 os.environ.setdefault("U2NET_HOME", str(MODELS_DIR / "rembg"))
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+# Slow / unstable connections: wait longer before a read times out (default is 10 s).
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 # Never send our own local UI traffic through a (corporate) proxy.

@@ -50,3 +50,20 @@ def test_flow(tmp_path, monkeypatch):
     preview, files, _ = ui._run("single", {"front": img}, None,
                                 "سريع", False, True, True, False, 0, 0, 0, 1, False, ["glb"], progress)
     assert preview.endswith("model.glb")
+
+
+def test_texture_network_failure_keeps_shape(tmp_path, monkeypatch):
+    from studio3d import config, engine, pipeline
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "outputs")
+    monkeypatch.setattr(engine, "generate_shape", lambda *a, **k: trimesh.creation.icosphere(3))
+    monkeypatch.setattr(engine, "prepare_image", lambda img, rb: img.convert("RGBA"))
+
+    def boom(*a, **k):
+        raise RuntimeError("Something wrong while loading C:/models/x")
+    monkeypatch.setattr(engine, "texture_mesh", boom)
+    img = Image.new("RGB", (32, 32), "white")
+    res = pipeline.run("single", {"front": img}, None,
+                       pipeline.Options(texture=True, randomize=False, formats=["glb", "stl"]))
+    assert res["warning"] and "الإنترنت" in res["warning"]
+    assert Path(res["preview"]).exists() and res["preview"].endswith("model.glb")
+    assert (Path(res["job_dir"]) / "model_white.glb").exists()

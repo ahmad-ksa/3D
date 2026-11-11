@@ -124,6 +124,8 @@ def _job_response(job: Job):
     if st:
         lines.append(f"Faces: {st.get('faces')}, vertices: {st.get('vertices')}, "
                      f"size (x,y,z): {st.get('size')}, watertight: {st.get('watertight')}")
+    if res.get("warning"):
+        lines.append(f"WARNING: {res['warning']}")
     if "seed" in res:
         lines.append(f"Seed: {res['seed']}")
     out = ["\n".join(lines)]

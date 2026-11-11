@@ -69,10 +69,22 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
         white = mesh_tools.process(mesh, do_clean=opt.clean, target_faces=int(opt.faces or 0),
                                    smooth_iters=int(opt.smooth or 0), holes=opt.holes,
                                    size_mm=0, on_ground=False)
+        # Save the shape right away, so a texturing failure never loses it.
+        mesh_tools.export(mesh_tools.normalize(white, None, True), job, "model_white", "glb")
         final = white
+        warning = None
         if opt.texture:
             progress(0.7, "تلوين المجسم (قد يستغرق عدة دقائق)…")
-            final = engine.texture_mesh(white, prepared["front"])
+            try:
+                final = engine.texture_mesh(white, prepared["front"])
+            except Exception as e:  # noqa: BLE001
+                import logging
+                logging.getLogger("studio3d.pipeline").exception("texturing failed")
+                engine.MANAGER.unload()
+                warning = ("تم توليد الشكل لكن فشل التلوين: " +
+                           ("انقطع الإنترنت أثناء تنزيل نموذج التلوين — أعد المحاولة وسيكمل التنزيل من حيث توقف."
+                            if _is_network(e) else str(e)[:300]))
+                opt.texture = False
 
     progress(0.95, "التصدير…")
     size = float(opt.size_mm or 0) or None
@@ -89,10 +101,18 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
 
     st = mesh_tools.stats(final)
     meta["stats"] = st
+    meta["warning"] = warning
     meta["files"] = [Path(f).name for f in files]
     engine.save_meta(job, meta)
     return {"job_dir": str(job), "preview": preview, "files": files, "stats": st, "seed": seed,
-            "mesh": final}
+            "mesh": final, "warning": warning}
+
+
+def _is_network(e: Exception) -> bool:
+    text = repr(e) + repr(getattr(e, "__cause__", "")) + repr(getattr(e, "__context__", ""))
+    keys = ("ConnectionError", "Timeout", "timed out", "getaddrinfo", "NameResolution", "HTTPError",
+            "Something wrong while loading")
+    return any(k in text for k in keys)
 
 
 def retexture(mesh_path: str, image, remove_bg: bool = True,

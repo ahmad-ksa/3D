@@ -71,7 +71,9 @@ def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, 
         log.error(traceback.format_exc())
         raise gr.Error(_friendly_error(e))
     st = res["stats"]
-    info = (f"✅ تم — **{st['faces']:,}** مضلع • **{st['vertices']:,}** نقطة • البذرة `{res['seed']}`  \n"
+    if res.get("warning"):
+        gr.Warning(res["warning"])
+    info = ("" if not res.get("warning") else f"⚠️ {res['warning']}  \n") + (f"✅ تم — **{st['faces']:,}** مضلع • **{st['vertices']:,}** نقطة • البذرة `{res['seed']}`  \n"
             f"<span class='hint'>محفوظ في: {res['job_dir']}</span>")
     return res["preview"], res["files"], info
 
@@ -81,8 +83,9 @@ def _friendly_error(e: Exception) -> str:
     name = type(e).__name__
     if "OutOfMemory" in name or "out of memory" in msg.lower():
         return "امتلأت ذاكرة كرت الشاشة. اختر جودة أقل، أو أغلق البرامج الأخرى (الألعاب/المتصفح) ثم أعد المحاولة."
-    if "Connection" in name or "resolve" in msg.lower() or "HTTPError" in name:
-        return "تعذّر تنزيل النموذج. تأكد من الاتصال بالإنترنت (مطلوب أول مرة فقط) ثم أعد المحاولة."
+    if pipeline._is_network(e):
+        return ("انقطع الإنترنت أثناء تنزيل النموذج. تأكد من الاتصال ثم أعد المحاولة — "
+                "التنزيل يكمل من حيث توقف (مطلوب أول مرة فقط).")
     if "blocked" in msg.lower() or "4551" in msg or "Application Control" in msg:
         return ("حظر Smart App Control أحد ملفات المكتبات. افتح تبويب «الجهاز» واضغط «فحص الحماية» "
                 "لمعرفة الملف وطريقة الحل.")
