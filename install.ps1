@@ -128,6 +128,13 @@ Push-Location $App
 & $Py -m studio3d.claude_setup
 Pop-Location
 New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE 'Pictures\Studio3D') | Out-Null
+# Claude desktop extension (one click install: double-click the file, or Settings > Extensions)
+$mcpb = Join-Path $App 'dist\studio3d.mcpb'
+if (Test-Path $mcpb) {
+    Copy-Item $mcpb (Join-Path $Root 'Studio3D-Claude.mcpb') -Force
+    Copy-Item $mcpb (Join-Path $desktop 'Studio3D-Claude.mcpb') -Force
+    Write-Host "Claude extension: double-click 'Studio3D-Claude.mcpb' on your desktop to add Studio3D to Claude."
+}
 
 # --- 6. Smart App Control check ---------------------------------------------
 Step 6 'Smart App Control compatibility check'

@@ -126,8 +126,8 @@ irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex
 البرنامج يعمل كـ **خادم MCP**، فيقدر Claude يولّد ويعدّل المجسمات بنفسه على جهازك.
 
 1. ثبّت تطبيق Claude للكمبيوتر وسجّل دخولك.
-2. الربط يتم تلقائياً أثناء تثبيت Studio3D. إذا ثبّتّ Claude **بعد** Studio3D: افتح Studio3D ← تبويب «الجهاز» ← **«ربط البرنامج مع تطبيق Claude»**.
-3. أغلق Claude **بالكامل** (أيقونة شريط المهام ← Quit) ثم افتحه.
+2. **الطريقة الأسهل (إضافة Extension):** المثبّت يضع ملف **`Studio3D-Claude.mcpb`** على سطح المكتب — اضغطه مرتين ← **Install** في Claude. (أو من Claude: Settings ← Extensions ← Install extension واختر الملف من `%LOCALAPPDATA%\Studio3D`).
+3. (طريقة بديلة) ملف الإعدادات: تبويب «الجهاز» ← **«ربط البرنامج مع تطبيق Claude»** ثم أغلق Claude بالكامل وافتحه.
 4. ضع صورك في مجلد **الصور ← Studio3D** (`Pictures\Studio3D`) واكتب لـ Claude مثلاً:
    - «ولّد مجسم من الصور front.jpg و back.jpg و left.jpg و right.jpg بجودة عالية مع تلوين»
    - «ولّد صندوق كنز Low-poly للعبة بـ 5000 مضلع وصدّره GLB»

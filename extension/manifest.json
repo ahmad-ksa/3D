@@ -1,0 +1,108 @@
+{
+  "manifest_version": "0.3",
+  "name": "studio3d",
+  "display_name": "Studio3D — مولّد المجسمات ثلاثية الأبعاد",
+  "version": "0.2.0",
+  "description": "Generate 3D models locally on your NVIDIA GPU (photos, image or text to 3D), AI texturing, quad topology and automatic skeleton via Blender, and a model library Claude can reuse.",
+  "long_description": "Requires Studio3D installed with: irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex",
+  "author": {
+    "name": "ahmad-ksa",
+    "url": "https://github.com/ahmad-ksa/3D"
+  },
+  "homepage": "https://github.com/ahmad-ksa/3D",
+  "server": {
+    "type": "python",
+    "entry_point": "server/launch.py",
+    "mcp_config": {
+      "command": "${user_config.studio3d_dir}\\python\\tools\\python.exe",
+      "args": [
+        "${__dirname}\\server\\launch.py"
+      ],
+      "env": {
+        "STUDIO3D_APP": "${user_config.studio3d_dir}\\app",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "studio3d_status",
+      "description": "GPU info, folders and whether a job is running."
+    },
+    {
+      "name": "list_input_images",
+      "description": "List photos in the Studio3D inbox folder (newest first)."
+    },
+    {
+      "name": "generate_from_images",
+      "description": "Build a 3D model from 1-4 photos of the same object (front required; back/left/right improve accuracy). target_faces: 0 keeps full detail, 3000-30000 for game assets. size_mm: real-world size of the longest side (3D printing). topology='quad' gives clean all-quad topology (Blender QuadriFlow, OBJ/FB"
+    },
+    {
+      "name": "generate_from_image",
+      "description": "Build a 3D model from a single photo or drawing (object on a plain background works best)."
+    },
+    {
+      "name": "generate_from_text",
+      "description": "Build a 3D model from an ENGLISH text description of ONE object (e.g. 'a low-poly wooden treasure chest, game asset'). First use downloads ~10 GB."
+    },
+    {
+      "name": "texture_model",
+      "description": "Paint an AI texture onto an existing (untextured) 3D model using a reference image."
+    },
+    {
+      "name": "edit_model",
+      "description": "Clean / decimate (low-poly) / smooth / resize an existing model and export it. Note: decimating a textured model removes its texture."
+    },
+    {
+      "name": "quad_remesh_model",
+      "description": "Convert a model to clean quad topology with Blender (QuadriFlow) — runs Blender hidden. Keeps the texture by re-baking it. Outputs OBJ + FBX (quads) and GLB."
+    },
+    {
+      "name": "rig_model",
+      "description": "Add an automatic humanoid skeleton (19 bones, Unity/Mixamo names) with skin weights, using Blender in the background. Best for characters standing in T-pose or A-pose. Outputs FBX + GLB."
+    },
+    {
+      "name": "check_job",
+      "description": "Wait for / get the result of a running generation job."
+    },
+    {
+      "name": "list_models",
+      "description": "Search the user's library of generated 3D models (newest first). query matches name, prompt or type ('rig', 'quad'...). Use this before generating something new."
+    },
+    {
+      "name": "get_model",
+      "description": "Details, file paths and a 4-view preview image of one library model (id from list_models, or a path to one of its files)."
+    },
+    {
+      "name": "export_model",
+      "description": "Copy a library model into a folder for use in a project (e.g. 'C:/Projects/Game/Assets/Models'). formats: e.g. ['fbx'] or ['glb','obj']; omit to copy every format available. name: file name."
+    },
+    {
+      "name": "open_in_blender",
+      "description": "Open a library model in a normal (visible) Blender window for the user to work on."
+    },
+    {
+      "name": "rename_model",
+      "description": "Give a library model a friendly name (shown in the app and searchable)."
+    },
+    {
+      "name": "preview_model",
+      "description": "Render a 4-view preview image of any 3D model file so you can inspect it."
+    }
+  ],
+  "user_config": {
+    "studio3d_dir": {
+      "type": "directory",
+      "title": "مجلد Studio3D",
+      "description": "The folder where Studio3D is installed (default: %LOCALAPPDATA%\\Studio3D)",
+      "default": "${HOME}\\AppData\\Local\\Studio3D",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ]
+  },
+  "license": "Proprietary"
+}
