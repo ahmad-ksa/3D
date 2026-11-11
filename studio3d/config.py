@@ -29,6 +29,7 @@ os.environ.setdefault("HY3DGEN_MODELS", str(MODELS_DIR / "hy3dgen"))
 os.environ.setdefault("HF_HOME", str(MODELS_DIR / "huggingface"))
 os.environ.setdefault("U2NET_HOME", str(MODELS_DIR / "rembg"))
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")  # harmless on Windows
 # Slow / unstable connections: wait longer before a read times out (default is 10 s).
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
