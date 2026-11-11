@@ -45,10 +45,13 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
                      "size_mm": opt.size_mm}}
 
     with gpu_lock(), engine.MANAGER.lock:
+        engine.reset_cancel()
+        engine.set_step_callback(None)
         if kind == "text":
             progress(0.05, "توليد صورة من النص…")
             inputs = {"front": engine.text_to_image(prompt, seed)}
 
+        engine.check_cancel()
         progress(0.15, "إزالة الخلفية…")
         prepared = {}
         for view, img in inputs.items():
@@ -60,13 +63,16 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
         if "front" not in prepared:
             raise ValueError("الصورة الأمامية مطلوبة.")
 
+        engine.check_cancel()
         progress(0.25, "توليد الشكل ثلاثي الأبعاد…")
+        _track_steps(progress, 0.25, 0.6, "توليد الشكل")
         if kind == "multiview":
             mesh = engine.generate_shape(prepared, "multiview", opt.quality, seed)
         else:
             mesh = engine.generate_shape(prepared["front"], "single", opt.quality, seed)
 
         # clean-up before texturing so the UVs stay valid
+        engine.check_cancel()
         progress(0.6, "تحسين المجسم…")
         white = mesh_tools.process(mesh, do_clean=opt.clean, target_faces=int(opt.faces or 0),
                                    smooth_iters=int(opt.smooth or 0), holes=opt.holes,
@@ -81,8 +87,12 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
             opt.texture = False
         if opt.texture:
             progress(0.7, "تلوين المجسم (قد يستغرق عدة دقائق)…")
+            _track_steps(progress, 0.7, 0.95, "تلوين المجسم")
             try:
+                engine.check_cancel()
                 final = engine.texture_mesh(white, prepared["front"])
+            except engine.Cancelled:
+                raise
             except Exception as e:  # noqa: BLE001
                 import logging
                 logging.getLogger("studio3d.pipeline").exception("texturing failed")
@@ -92,6 +102,7 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
                             if _is_network(e) else str(e)[:300]))
                 opt.texture = False
 
+    engine.set_step_callback(None)
     progress(0.95, "التصدير…")
     size = float(opt.size_mm or 0) or None
     white = mesh_tools.normalize(white, size, True)
@@ -122,11 +133,34 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
             "mesh": final, "warning": warning}
 
 
+def _track_steps(progress, start, end, label):
+    """Map the model's inner steps (diffusion, mesh decoding) onto the overall progress bar."""
+    names = {"Diffusion Sampling": "انتشار", "Volume Decoding": "بناء الشكل", "FlashVDM": "بناء الشكل"}
+    state = {"stage": 0, "last": None}
+
+    def cb(desc, done, total):
+        if total <= 0:
+            return
+        key = desc.split(":")[0].strip()
+        if key != state["last"]:
+            state["last"] = key
+            state["stage"] = min(state["stage"] + 1, 3)
+        # first loop (diffusion) gets 70 % of the stage, the following ones (decoding) the rest
+        a, b = (0.0, 0.7) if state["stage"] <= 1 else (0.7, 1.0)
+        frac = a + (b - a) * min(1.0, done / total)
+        sub = next((v for k, v in names.items() if k in desc), "")
+        progress(start + (end - start) * frac,
+                 f"{label}… {sub} {done}/{total}".replace("  ", " "))
+
+    engine.set_step_callback(cb)
+
+
 def _blender_steps(model_path, job, opt, progress, warnings, meta):
     """Quad topology and/or skeleton through Blender (runs hidden, then closes)."""
     from . import blender
     files, base = [], model_path
     if opt.topology == "quad":
+        engine.check_cancel()
         progress(0.96, "تحويل إلى مربعات Quad عبر Blender…")
         try:
             q = blender.quad_remesh(base, job, target_faces=int(opt.faces or 10000),
@@ -134,14 +168,19 @@ def _blender_steps(model_path, job, opt, progress, warnings, meta):
             files += q["files"]
             base = next(f for f in q["files"] if f.endswith(".glb"))
             meta["quad"] = {k: q[k] for k in ("faces", "quads", "vertices", "method", "textured")}
+        except engine.Cancelled:
+            raise
         except Exception as e:  # noqa: BLE001
             warnings.append(f"فشل تحويل Quad: {str(e)[:200]}")
     if opt.rig:
+        engine.check_cancel()
         progress(0.98, "بناء الهيكل العظمي عبر Blender…")
         try:
             r = blender.auto_rig(base, job)
             files += r["files"]
             meta["rig"] = {k: r.get(k) for k in ("bones", "a_pose", "warnings", "arm_test_moved_fraction")}
+        except engine.Cancelled:
+            raise
         except Exception as e:  # noqa: BLE001
             warnings.append(f"فشل بناء الهيكل العظمي: {str(e)[:200]}")
     return base, files

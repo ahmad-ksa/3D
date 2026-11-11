@@ -24,6 +24,100 @@ if str(config.VENDOR_DIR) not in sys.path:
 
 config.patch_hf_downloads()
 
+
+# ---------------------------------------------------------------------------
+# Cancelling a running generation (the ⏹ button)
+# ---------------------------------------------------------------------------
+class Cancelled(Exception):
+    pass
+
+
+CANCEL = threading.Event()
+
+
+def request_cancel():
+    CANCEL.set()
+
+
+def reset_cancel():
+    CANCEL.clear()
+
+
+def check_cancel():
+    if CANCEL.is_set():
+        raise Cancelled("تم إيقاف التوليد")
+
+
+_STEP_CB = threading.local()
+
+
+def set_step_callback(fn):
+    """fn(desc, done, total) is called on every diffusion / decoding step of this thread."""
+    _STEP_CB.fn = fn
+
+
+def _step(bar, done):
+    fn = getattr(_STEP_CB, "fn", None)
+    if fn is None:
+        return
+    total = getattr(bar, "total", None) or 0
+    try:
+        fn(str(getattr(bar, "desc", "") or ""), int(done), int(total))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class _CancellableBar:
+    """Wraps a tqdm bar: every step checks the stop button (works for loops and .update())
+    and reports fine-grained progress."""
+
+    def __init__(self, bar):
+        self._bar = bar
+        self._done = 0
+
+    def __iter__(self):
+        for x in self._bar:
+            check_cancel()
+            self._done += 1
+            _step(self._bar, self._done)
+            yield x
+
+    def update(self, n=1, *a, **k):
+        check_cancel()
+        self._done += n or 0
+        _step(self._bar, self._done)
+        return self._bar.update(n, *a, **k)
+
+    def __enter__(self):
+        self._bar.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        return self._bar.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._bar, name)
+
+
+def _patch_progress_bars():
+    """Make the diffusion / mesh-decoding loops of Hunyuan3D and diffusers stoppable."""
+    import importlib
+    for mod_name in ("hy3dgen.shapegen.pipelines", "hy3dgen.shapegen.models.autoencoders.volume_decoders",
+                     "diffusers.pipelines.pipeline_utils"):
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception:  # noqa: BLE001
+            continue
+        orig = getattr(mod, "tqdm", None)
+        if orig is None or getattr(orig, "_studio3d", False):
+            continue
+
+        def make(*a, _orig=orig, **k):
+            return _CancellableBar(_orig(*a, **k))
+
+        make._studio3d = True
+        mod.tqdm = make
+
 VIEWS = ("front", "back", "left", "right")
 
 
@@ -152,6 +246,7 @@ def _load_shape(kind: str, variant: str):
     torch = _torch()
     from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
 
+    _patch_progress_bars()
     spec = config.SHAPE_MODELS[kind]
     device = "cuda" if torch.cuda.is_available() else "cpu"
     pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
@@ -166,6 +261,7 @@ def _load_texture():
     torch = _torch()
     from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
+    _patch_progress_bars()
     pipe = Hunyuan3DPaintPipeline.from_pretrained(config.TEXTURE_MODEL["repo"],
                                                   subfolder=config.TEXTURE_MODEL["subfolder"])
     if torch.cuda.is_available():
@@ -176,6 +272,7 @@ def _load_texture():
 def _load_t2i():
     torch = _torch()
     from diffusers import AutoPipelineForText2Image
+    _patch_progress_bars()
 
     pipe = AutoPipelineForText2Image.from_pretrained(
         config.TEXT2IMAGE_MODEL, torch_dtype=torch.float16,

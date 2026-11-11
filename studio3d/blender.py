@@ -133,18 +133,32 @@ def run_script(name: str, args: dict, log_dir: str | Path | None = None, timeout
         else:
             cmd = [exe, "-b", "--factory-startup", "--python-exit-code", "1", "--python", str(script),
                    "--", args_path]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                  timeout=timeout, **_no_window())
-        except subprocess.TimeoutExpired:
-            raise BlenderError(f"Blender لم ينتهِ خلال {timeout // 60} دقيقة")
+        from . import engine
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", **_no_window())
+        waited = 0.0
+        while True:
+            try:
+                out, err = proc.communicate(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                waited += 1
+                if engine.CANCEL.is_set() or waited > timeout:
+                    proc.kill()
+                    try:
+                        proc.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if engine.CANCEL.is_set():
+                        raise engine.Cancelled("تم إيقاف التوليد")
+                    raise BlenderError(f"Blender لم ينتهِ خلال {timeout // 60} دقيقة")
         if log_dir:
             Path(log_dir).mkdir(parents=True, exist_ok=True)
             (Path(log_dir) / f"blender_{name}.log").write_text(
-                (proc.stdout or "") + "\n--- stderr ---\n" + (proc.stderr or ""), encoding="utf-8")
+                (out or "") + "\n--- stderr ---\n" + (err or ""), encoding="utf-8")
         result_file = Path(args["result"])
         if not result_file.exists():  # the bpy module may crash at interpreter exit AFTER writing
-            tail = (proc.stderr or proc.stdout or "")[-600:]
+            tail = (err or out or "")[-600:]
             raise BlenderError(f"Blender توقف بدون نتيجة (exit {proc.returncode}): {tail}")
         result = json.loads(result_file.read_text(encoding="utf-8"))
     if not result.get("ok"):

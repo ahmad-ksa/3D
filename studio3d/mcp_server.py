@@ -93,7 +93,7 @@ def _start(kind: str, fn) -> Job:
             job.result = fn(progress)
         except Exception as e:  # noqa: BLE001
             log.error(traceback.format_exc())
-            job.error = _friendly(e)
+            job.error = "cancelled by the user" if type(e).__name__ == "Cancelled" else _friendly(e)
         finally:
             job.done.set()
 
@@ -376,6 +376,15 @@ async def lip_sync_model(model: str, audio: str, strength_degrees: float = 10, c
     from . import pipeline
     job = _start("talk", lambda pr: pipeline.lip_sync(path, aud, strength_degrees))
     return await _wait(job, ctx)
+
+
+@mcp.tool()
+def cancel_job(job_id: str = "") -> str:
+    """Stop the running generation (the GPU work stops at the next step)."""
+    from . import engine
+    engine.request_cancel()
+    running = [j.id for j in JOBS.values() if not j.done.is_set()]
+    return f"Stop requested. Running jobs: {running or 'none'}"
 
 
 @mcp.tool()

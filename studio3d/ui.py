@@ -51,10 +51,25 @@ TIMER_JS = r"""
       .replace(/(\d+(?:\.\d+)?)\s*s\b/g, function (_, a) { return mmss(a); })
       .replace('processing', 'جارٍ العمل').replace('queue', 'الانتظار');
   }
+  function percent(el) {
+    var box = el.closest('.wrap') || el.parentElement;
+    for (var i = 0; i < 3 && box; i++) {
+      var lvl = box.querySelector('.progress-level-inner, .progress-level');
+      if (lvl) {
+        var m = (lvl.textContent || '').match(/(\d+(?:\.\d+)?)\s*%/);
+        if (m) return Math.round(parseFloat(m[1])) + '%';
+        var f = (lvl.textContent || '').match(/(\d+)\s*\/\s*(\d+)/);
+        if (f && +f[2] > 0) return Math.round(100 * f[1] / f[2]) + '%';
+      }
+      box = box.parentElement;
+    }
+    return '';
+  }
   function update() {
     document.querySelectorAll('.progress-text').forEach(function (el) {
       var raw = el.textContent || '';
-      var out = fmt(raw);
+      var p = percent(el);
+      var out = fmt(raw) + (p && raw.indexOf('%') < 0 ? '  •  ' + p : '');
       if (el.getAttribute('data-mmss') !== out) el.setAttribute('data-mmss', out);
     });
   }
@@ -99,13 +114,45 @@ def _more_options():
     return clean, holes, smooth, faces, size_mm, seed, rand, formats
 
 
+_OPTION_SETS: list = []   # every tab's option widgets, to restore the last-used settings
+_OPTION_KEYS = ["quality", "texture", "remove_bg", "clean", "holes", "smooth", "faces", "size_mm", "seed",
+                "randomize", "formats", "topology", "rig"]
+
+
+def _save_last_options(values):
+    from . import blender
+    try:
+        blender.save_setting("last_options", dict(zip(_OPTION_KEYS, values)))
+    except Exception:  # noqa: BLE001
+        log.warning("could not save settings", exc_info=True)
+
+
+def load_last_options():
+    """Values for every option widget of every generation tab (last settings used)."""
+    from . import blender
+    saved = blender.load_settings().get("last_options") or {}
+    out = []
+    for opts in _OPTION_SETS:
+        for key, comp in zip(_OPTION_KEYS, opts):
+            out.append(saved[key] if key in saved and saved[key] is not None else gr.update())
+    return out
+
+
+def stop_generation():
+    engine.request_cancel()
+    gr.Info("⏹ جارٍ إيقاف التوليد…")
+
+
 def _generate_block(show_texture=True, label="✨ توليد المجسم"):
     """Quick settings + button (always visible) + collapsed extra settings."""
     quality, texture, remove_bg, topology, rig = _quick_options(show_texture)
-    btn = gr.Button(label, variant="primary")
+    with gr.Row(elem_classes="compact"):
+        btn = gr.Button(label, variant="primary", scale=4)
+        stop = gr.Button("⏹ إيقاف", variant="stop", scale=1, min_width=90)
     clean, holes, smooth, faces, size_mm, seed, rand, formats = _more_options()
-    return btn, [quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand, formats,
-                 topology, rig]
+    opts = [quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand, formats, topology, rig]
+    _OPTION_SETS.append(opts)
+    return btn, stop, opts
 
 
 def _served(path) -> str:
@@ -148,6 +195,8 @@ def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, 
          size_mm, seed, rand, formats, topology="tri", rig=False, progress=None):
     if progress is None:
         progress = gr.Progress()
+    _save_last_options([quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand,
+                        list(formats or []), topology or "tri", bool(rig)])
     opt = pipeline.Options(topology=topology or "tri", rig=bool(rig), quality=quality, texture=bool(texture), remove_bg=bool(remove_bg),
                            clean=bool(clean), holes=bool(holes), smooth=int(smooth or 0),
                            faces=int(faces or 0), size_mm=float(size_mm or 0),
@@ -170,6 +219,8 @@ def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, 
 def _friendly_error(e: Exception) -> str:
     msg = str(e)
     name = type(e).__name__
+    if isinstance(e, engine.Cancelled):
+        return "⏹ تم إيقاف التوليد."
     if "OutOfMemory" in name or "out of memory" in msg.lower():
         return "امتلأت ذاكرة كرت الشاشة. اختر جودة أقل، أو أغلق البرامج الأخرى (الألعاب/المتصفح) ثم أعد المحاولة."
     if pipeline._is_network(e):
@@ -483,6 +534,7 @@ def run_sac_check():
 # Layout
 # ---------------------------------------------------------------------------
 def build() -> gr.Blocks:
+    _OPTION_SETS.clear()
     theme = gr.themes.Soft(primary_hue="indigo", secondary_hue="cyan",
                            font=[gr.themes.Font("Segoe UI"), gr.themes.Font("Tahoma"), "sans-serif"],
                            font_mono=[gr.themes.Font("Consolas"), "monospace"])
@@ -520,10 +572,11 @@ def build() -> gr.Blocks:
                             sheet_msg = gr.Markdown()
                         sheet_orig = gr.State(None)
                         sheet_pts = gr.State([])
-                        btn, opts = _generate_block()
+                        btn, stop, opts = _generate_block()
                     with gr.Column(scale=6):
                         out = _outputs()
-                btn.click(gen_multiview, [mv["front"], mv["back"], mv["left"], mv["right"], *opts], list(out))
+                ev = btn.click(gen_multiview, [mv["front"], mv["back"], mv["left"], mv["right"], *opts], list(out))
+                stop.click(stop_generation, None, None, cancels=[ev])
                 four = [mv["front"], mv["back"], mv["left"], mv["right"]]
                 sw_fb.click(lambda f, b, l, r: (b, f, l, r), four, four)
                 sw_lr.click(lambda f, b, l, r: (f, b, r, l), four, four)
@@ -538,10 +591,11 @@ def build() -> gr.Blocks:
                 with gr.Row():
                     with gr.Column(scale=5):
                         img = gr.Image(type="pil", image_mode="RGBA", label="الصورة", height=240)
-                        btn1, opts1 = _generate_block()
+                        btn1, stop1, opts1 = _generate_block()
                     with gr.Column(scale=6):
                         out1 = _outputs()
-                btn1.click(gen_single, [img, *opts1], list(out1))
+                ev1 = btn1.click(gen_single, [img, *opts1], list(out1))
+                stop1.click(stop_generation, None, None, cancels=[ev1])
 
             # ---- text ----
             with gr.Tab("✍️ من نص"):
@@ -551,10 +605,11 @@ def build() -> gr.Blocks:
                                             placeholder="A wooden chair with curved legs",
                                             info="اكتب الوصف بالإنجليزية لأفضل نتيجة. "
                                                  "يتطلب تنزيل نموذج إضافي (~10GB) أول مرة.")
-                        btn2, opts2 = _generate_block()
+                        btn2, stop2, opts2 = _generate_block()
                     with gr.Column(scale=6):
                         out2 = _outputs()
-                btn2.click(gen_text, [prompt, *opts2], list(out2))
+                ev2 = btn2.click(gen_text, [prompt, *opts2], list(out2))
+                stop2.click(stop_generation, None, None, cancels=[ev2])
 
             # ---- retexture ----
             with gr.Tab("🎨 تلوين مجسم"):
@@ -680,6 +735,7 @@ def build() -> gr.Blocks:
                 sac_btn.click(run_sac_check, None, sac_out)
                 demo.load(device_text, None, dev)
 
+        demo.load(load_last_options, None, [c for opts in _OPTION_SETS for c in opts])
         gr.Markdown("<span class='hint'>يعمل بنماذج Tencent Hunyuan3D 2.0 مفتوحة المصدر "
                     "(رخصة Tencent Hunyuan 3D 2.0 Community).</span>")
     return demo
