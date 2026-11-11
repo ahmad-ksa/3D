@@ -23,6 +23,8 @@ class Options:
     seed: int = 1234
     randomize: bool = True
     formats: list = field(default_factory=lambda: ["glb", "stl"])
+    topology: str = "tri"     # "tri" | "quad" (quad = QuadriFlow in Blender)
+    rig: bool = False         # humanoid skeleton via Blender
 
 
 def gpu_lock() -> FileLock:
@@ -104,12 +106,68 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
         files.append(mesh_tools.export(white, job, "model_white", "glb"))
 
     st = mesh_tools.stats(final)
+    warnings = [warning] if warning else []
+    if opt.topology == "quad" or opt.rig:
+        preview, extra = _blender_steps(preview, job, opt, progress, warnings, meta)
+        files += extra
+        if "quad" in meta:
+            st = dict(st, faces=meta["quad"]["faces"], quads=meta["quad"]["quads"],
+                      vertices=meta["quad"]["vertices"])
+    warning = " | ".join(warnings) or None
     meta["stats"] = st
     meta["warning"] = warning
     meta["files"] = [Path(f).name for f in files]
     engine.save_meta(job, meta)
     return {"job_dir": str(job), "preview": preview, "files": files, "stats": st, "seed": seed,
             "mesh": final, "warning": warning}
+
+
+def _blender_steps(model_path, job, opt, progress, warnings, meta):
+    """Quad topology and/or skeleton through Blender (runs hidden, then closes)."""
+    from . import blender
+    files, base = [], model_path
+    if opt.topology == "quad":
+        progress(0.96, "تحويل إلى مربعات Quad عبر Blender…")
+        try:
+            q = blender.quad_remesh(base, job, target_faces=int(opt.faces or 10000),
+                                    bake_size=2048 if opt.texture else 0)
+            files += q["files"]
+            base = next(f for f in q["files"] if f.endswith(".glb"))
+            meta["quad"] = {k: q[k] for k in ("faces", "quads", "vertices", "method", "textured")}
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"فشل تحويل Quad: {str(e)[:200]}")
+    if opt.rig:
+        progress(0.98, "بناء الهيكل العظمي عبر Blender…")
+        try:
+            r = blender.auto_rig(base, job)
+            files += r["files"]
+            meta["rig"] = {k: r.get(k) for k in ("bones", "a_pose", "warnings", "arm_test_moved_fraction")}
+        except Exception as e:  # noqa: BLE001
+            warnings.append(f"فشل بناء الهيكل العظمي: {str(e)[:200]}")
+    return base, files
+
+
+def quad(model_path: str, target_faces: int = 10000, bake_size: int = 2048) -> dict:
+    from . import blender
+    job = engine.new_job_dir("quad")
+    q = blender.quad_remesh(model_path, job, target_faces=target_faces, bake_size=bake_size)
+    preview = next(f for f in q["files"] if f.endswith(".glb"))
+    stats = {k: q[k] for k in ("faces", "quads", "vertices")}
+    engine.save_meta(job, {"kind": "quad", "source": str(model_path), "stats": stats, "method": q["method"]})
+    return {"job_dir": str(job), "preview": preview, "files": q["files"], "stats": stats,
+            "mesh": mesh_tools.load_mesh(preview)}
+
+
+def rig(model_path: str) -> dict:
+    from . import blender
+    job = engine.new_job_dir("rig")
+    r = blender.auto_rig(model_path, job)
+    preview = next(f for f in r["files"] if f.endswith(".glb"))
+    info = {k: r.get(k) for k in ("bones", "a_pose", "warnings", "arm_test_moved_fraction", "faces",
+                                  "vertices")}
+    engine.save_meta(job, {"kind": "rig", "source": str(model_path), "rig": info})
+    return {"job_dir": str(job), "preview": preview, "files": r["files"], "stats": info,
+            "mesh": mesh_tools.load_mesh(preview)}
 
 
 def _is_network(e: Exception) -> bool:

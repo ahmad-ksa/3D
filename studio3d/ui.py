@@ -69,7 +69,11 @@ def _quick_options(show_texture=True):
         with gr.Column(scale=2, min_width=160, elem_classes="compact"):
             texture = gr.Checkbox(value=False, label="🎨 تلوين (Texture)", visible=show_texture)
             remove_bg = gr.Checkbox(value=True, label="إزالة الخلفية")
-    return quality, texture, remove_bg
+    with gr.Row(equal_height=True, elem_classes="compact"):
+        topology = gr.Radio([("مثلثات", "tri"), ("مربعات Quad", "quad")], value="tri", label="Topology",
+                            scale=3)
+        rig = gr.Checkbox(value=False, label="🦴 هيكل عظمي (شخصيات)", scale=2, min_width=160)
+    return quality, texture, remove_bg, topology, rig
 
 
 def _more_options():
@@ -90,10 +94,11 @@ def _more_options():
 
 def _generate_block(show_texture=True, label="✨ توليد المجسم"):
     """Quick settings + button (always visible) + collapsed extra settings."""
-    quality, texture, remove_bg = _quick_options(show_texture)
+    quality, texture, remove_bg, topology, rig = _quick_options(show_texture)
     btn = gr.Button(label, variant="primary")
     clean, holes, smooth, faces, size_mm, seed, rand, formats = _more_options()
-    return btn, [quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand, formats]
+    return btn, [quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand, formats,
+                 topology, rig]
 
 
 def _outputs():
@@ -107,8 +112,10 @@ def _outputs():
 # Core pipeline used by every tab
 # ---------------------------------------------------------------------------
 def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, smooth, faces,
-         size_mm, seed, rand, formats, progress):
-    opt = pipeline.Options(quality=quality, texture=bool(texture), remove_bg=bool(remove_bg),
+         size_mm, seed, rand, formats, topology="tri", rig=False, progress=None):
+    if progress is None:
+        progress = gr.Progress()
+    opt = pipeline.Options(topology=topology or "tri", rig=bool(rig), quality=quality, texture=bool(texture), remove_bg=bool(remove_bg),
                            clean=bool(clean), holes=bool(holes), smooth=int(smooth or 0),
                            faces=int(faces or 0), size_mm=float(size_mm or 0),
                            seed=int(seed if seed is not None else -1), randomize=bool(rand),
@@ -121,7 +128,8 @@ def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, 
     st = res["stats"]
     if res.get("warning"):
         gr.Warning(res["warning"])
-    info = ("" if not res.get("warning") else f"⚠️ {res['warning']}  \n") + (f"✅ تم — **{st['faces']:,}** مضلع • **{st['vertices']:,}** نقطة • البذرة `{res['seed']}`  \n"
+    quads = f" ({st['quads']:,} Quad)" if st.get("quads") else ""
+    info = ("" if not res.get("warning") else f"⚠️ {res['warning']}  \n") + (f"✅ تم — **{st['faces']:,}** مضلع{quads} • **{st['vertices']:,}** نقطة • البذرة `{res['seed']}`  \n"
             f"<span class='hint'>محفوظ في: {res['job_dir']}</span>")
     return res["preview"], res["files"], info
 
@@ -147,19 +155,19 @@ def gen_multiview(front, back, left, right, *opts, progress=gr.Progress(track_tq
     if front is None:
         raise gr.Error("الصورة الأمامية مطلوبة على الأقل.")
     inputs = {"front": front, "back": back, "left": left, "right": right}
-    return _run("multiview", inputs, None, *opts, progress)
+    return _run("multiview", inputs, None, *opts, progress=progress)
 
 
 def gen_single(image, *opts, progress=gr.Progress(track_tqdm=True)):
     if image is None:
         raise gr.Error("ارفع صورة أولاً.")
-    return _run("single", {"front": image}, None, *opts, progress)
+    return _run("single", {"front": image}, None, *opts, progress=progress)
 
 
 def gen_text(prompt, *opts, progress=gr.Progress(track_tqdm=True)):
     if not prompt or not prompt.strip():
         raise gr.Error("اكتب وصفاً للمجسم.")
-    return _run("text", {}, prompt.strip(), *opts, progress)
+    return _run("text", {}, prompt.strip(), *opts, progress=progress)
 
 
 def retexture(mesh_file, image, remove_bg, progress=gr.Progress(track_tqdm=True)):
@@ -181,6 +189,58 @@ def edit_mesh(mesh_file, clean, holes, smooth, faces, size_mm, formats):
     b, a = res["before"], res["stats"]
     info = f"قبل: {b['faces']:,} مضلع ← بعد: **{a['faces']:,}** مضلع • المقاس: {a['size']}"
     return res["preview"], res["files"], info
+
+
+def blender_tool(mesh_file, do_quad, quad_faces, do_rig, progress=gr.Progress()):
+    if mesh_file is None:
+        raise gr.Error("ارفع ملف مجسم أو اختر واحداً من السجل.")
+    if not (do_quad or do_rig):
+        raise gr.Error("اختر Quad أو هيكل عظمي.")
+    files, preview, notes = [], None, []
+    path = mesh_file
+    try:
+        if do_quad:
+            progress(0.2, desc="تحويل إلى Quad عبر Blender…")
+            q = pipeline.quad(path, int(quad_faces or 10000))
+            files += q["files"]
+            preview = path = q["preview"]
+            notes.append(f"Quad: **{q['stats']['faces']:,}** وجه، منها {q['stats']['quads']:,} مربع")
+        if do_rig:
+            progress(0.6, desc="بناء الهيكل العظمي عبر Blender…")
+            r = pipeline.rig(path)
+            files += r["files"]
+            preview = r["preview"]
+            notes.append(f"🦴 هيكل عظمي: **{r['stats']['bones']}** عظمة — جاهز للتصدير إلى Unity/Unreal/Mixamo (FBX)")
+    except Exception as e:  # noqa: BLE001
+        log.error(traceback.format_exc())
+        raise gr.Error(f"Blender: {str(e)[:400]}")
+    return preview, files, "✅ " + "  \n".join(notes)
+
+
+def last_model():
+    for name in _jobs():
+        d = config.OUTPUT_DIR / name
+        for cand in ("model_textured.glb", "model.glb"):
+            if (d / cand).exists():
+                return str(d / cand)
+    return None
+
+
+def blender_status():
+    from . import blender
+    exe = blender.find_blender()
+    if not exe:
+        return "❌ **Blender غير مثبّت** — ثبّته مجاناً من blender.org (4.2 أو أحدث) أو حدّد مساره."
+    return f"✅ Blender: `{exe}` — الإصدار {blender.blender_version(exe) or '?'}"
+
+
+def save_blender_path(path):
+    from . import blender
+    path = (path or "").strip().strip('"')
+    if path and not Path(path).exists():
+        return "❌ المسار غير موجود"
+    blender.save_setting("blender_path", path)
+    return blender_status()
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +382,24 @@ def build() -> gr.Blocks:
                         out4 = _outputs()
                 btn4.click(edit_mesh, [emesh, eclean, eholes, esmooth, efaces, esize, eformats], list(out4))
 
+            # ---- blender: quad + rig ----
+            with gr.Tab("🦴 Quad وهيكل عظمي"):
+                with gr.Row():
+                    with gr.Column(scale=5):
+                        gr.Markdown("يفتح **Blender** في الخلفية، ينفّذ، يحفظ ويغلق تلقائياً.", elem_classes="hint")
+                        bmesh_in = gr.File(label="المجسم", file_types=[".glb", ".obj", ".fbx", ".stl", ".ply"],
+                                           type="filepath")
+                        use_last = gr.Button("استخدم آخر مجسم ولّدته", size="sm")
+                        with gr.Row(elem_classes="compact"):
+                            bq = gr.Checkbox(value=True, label="مربعات Quad")
+                            bqf = gr.Slider(500, 50000, value=10000, step=500, label="عدد الأوجه")
+                        br = gr.Checkbox(value=True, label="🦴 هيكل عظمي (شخصية واقفة T-pose أو A-pose)")
+                        bbtn = gr.Button("تنفيذ", variant="primary")
+                    with gr.Column(scale=6):
+                        bout = _outputs()
+                use_last.click(last_model, None, bmesh_in)
+                bbtn.click(blender_tool, [bmesh_in, bq, bqf, br], list(bout))
+
             # ---- history ----
             with gr.Tab("🗂️ السجل"):
                 with gr.Row():
@@ -342,6 +420,13 @@ def build() -> gr.Blocks:
                 gr.Markdown(f"مجلد النماذج: `{config.MODELS_DIR}`  \nمجلد النتائج: `{config.OUTPUT_DIR}`")
                 sac_btn = gr.Button("🛡️ فحص الحماية (Smart App Control)")
                 sac_out = gr.Markdown()
+                bl_status = gr.Markdown()
+                with gr.Row():
+                    bl_path = gr.Textbox(label="مسار blender.exe (اختياري — يُكتشف تلقائياً)", scale=4,
+                                         placeholder=r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe")
+                    bl_save = gr.Button("حفظ", scale=1)
+                bl_save.click(save_blender_path, bl_path, bl_status)
+                demo.load(blender_status, None, bl_status)
                 claude_btn = gr.Button("🤖 ربط البرنامج مع تطبيق Claude")
                 claude_btn.click(connect_claude, None, sac_out)
                 unload = gr.Button("تفريغ ذاكرة كرت الشاشة")

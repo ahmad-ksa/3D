@@ -37,7 +37,7 @@ def test_flow(tmp_path, monkeypatch):
     progress = lambda *a, **k: None  # noqa: E731
     opts = ["متوازن", True, True, True, False, 2, 1000, 120, 5, False, ["glb", "obj", "stl", "3mf"]]
     preview, files, info = ui._run("multiview", {"front": img, "back": None, "left": img, "right": None},
-                                   None, *opts, progress)
+                                   None, *opts, progress=progress)
     assert preview.endswith("model_textured.glb") and os.path.exists(preview)
     names = {Path(f).name for f in files}
     assert {"model.stl", "model.3mf", "model_white.glb"} <= names
@@ -49,7 +49,7 @@ def test_flow(tmp_path, monkeypatch):
 
     # single image, no texture
     preview, files, _ = ui._run("single", {"front": img}, None,
-                                "سريع", False, True, True, False, 0, 0, 0, 1, False, ["glb"], progress)
+                                "سريع", False, True, True, False, 0, 0, 0, 1, False, ["glb"], progress=progress)
     assert preview.endswith("model.glb")
 
 

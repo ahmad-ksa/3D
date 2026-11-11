@@ -20,6 +20,12 @@ jobs:
           STUDIO3D_NONINTERACTIVE: '1'
         run: .\install.ps1
 
+      - name: Install Blender (to test quad remesh + auto-rig with the real blender.exe)
+        shell: powershell
+        run: |
+          choco install blender -y --no-progress
+          Get-ChildItem 'C:\Program Files\Blender Foundation' -Recurse -Filter blender.exe | Select-Object -First 1 FullName
+
       - name: Unit tests with the installed Python
         shell: powershell
         run: |
@@ -28,8 +34,9 @@ jobs:
           & $Py -m pip install --disable-pip-version-check pytest
           Set-Location (Join-Path $Root 'app')
           $env:PYTHONPATH = (Get-Location).Path
-          & $Py -m pytest -q tests
+          & $Py -m pytest -q -rs tests
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $Py -c "from studio3d import blender; e=blender.find_blender(); print('Blender:', e, blender.blender_version(e)); assert e"
 
       - name: Smoke test - app starts and serves the UI
         shell: powershell

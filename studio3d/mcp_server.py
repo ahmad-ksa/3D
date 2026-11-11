@@ -38,7 +38,7 @@ log = logging.getLogger("studio3d.mcp")
 INBOX = Path(os.environ.get("STUDIO3D_INBOX",
                             Path.home() / "Pictures" / "Studio3D")).expanduser()
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-MODEL_EXT = {".glb", ".obj", ".stl", ".ply", ".gltf"}
+MODEL_EXT = {".glb", ".obj", ".stl", ".ply", ".gltf", ".fbx"}
 WAIT_SECONDS = 50  # how long one tool call waits before handing back a job id
 
 Quality = Literal["سريع", "متوازن", "عالي الجودة", "fast", "balanced", "high"]
@@ -179,9 +179,10 @@ def _image(ref: Optional[str]):
     return PILImage.open(_resolve_file(ref, IMAGE_EXT)).copy()
 
 
-def _options(quality, texture, target_faces, size_mm, smooth, seed, formats, remove_background=True):
+def _options(quality, texture, target_faces, size_mm, smooth, seed, formats, remove_background=True,
+             topology="tri", rig=False):
     from .pipeline import Options
-    return Options(quality=_Q.get(quality, quality), texture=bool(texture), remove_bg=remove_background,
+    return Options(topology=topology, rig=bool(rig), quality=_Q.get(quality, quality), texture=bool(texture), remove_bg=remove_background,
                    clean=True, smooth=int(smooth or 0), faces=int(target_faces or 0),
                    size_mm=float(size_mm or 0), seed=int(seed) if seed is not None else -1,
                    randomize=seed is None, formats=list(formats or ["glb"]))
@@ -224,13 +225,17 @@ async def generate_from_images(
     smooth: int = 0,
     seed: Optional[int] = None,
     formats: list[Format] = ["glb"],  # noqa: B006
+    topology: Literal["tri", "quad"] = "tri",
+    rig: bool = False,
     ctx: Context = None,
 ) -> list:
     """Build a 3D model from 1-4 photos of the same object (front required; back/left/right
     improve accuracy). target_faces: 0 keeps full detail, 3000-30000 for game assets.
-    size_mm: real-world size of the longest side (3D printing)."""
+    size_mm: real-world size of the longest side (3D printing).
+    topology='quad' gives clean all-quad topology (Blender QuadriFlow, OBJ/FBX keep quads).
+    rig=true adds a humanoid skeleton (T/A-pose characters) and exports FBX for Unity/Unreal/Mixamo."""
     imgs = {"front": _image(front), "back": _image(back), "left": _image(left), "right": _image(right)}
-    opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats)
+    opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats, topology=topology, rig=rig)
     from . import pipeline
     job = _start("multiview", lambda pr: pipeline.run("multiview", imgs, None, opt, pr))
     return await _wait(job, ctx)
@@ -246,11 +251,13 @@ async def generate_from_image(
     smooth: int = 0,
     seed: Optional[int] = None,
     formats: list[Format] = ["glb"],  # noqa: B006
+    topology: Literal["tri", "quad"] = "tri",
+    rig: bool = False,
     ctx: Context = None,
 ) -> list:
     """Build a 3D model from a single photo or drawing (object on a plain background works best)."""
     img = _image(image)
-    opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats)
+    opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats, topology=topology, rig=rig)
     from . import pipeline
     job = _start("single", lambda pr: pipeline.run("single", {"front": img}, None, opt, pr))
     return await _wait(job, ctx)
@@ -266,11 +273,13 @@ async def generate_from_text(
     smooth: int = 0,
     seed: Optional[int] = None,
     formats: list[Format] = ["glb"],  # noqa: B006
+    topology: Literal["tri", "quad"] = "tri",
+    rig: bool = False,
     ctx: Context = None,
 ) -> list:
     """Build a 3D model from an ENGLISH text description of ONE object
     (e.g. 'a low-poly wooden treasure chest, game asset'). First use downloads ~10 GB."""
-    opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats)
+    opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats, topology=topology, rig=rig)
     from . import pipeline
     job = _start("text", lambda pr: pipeline.run("text", {}, prompt, opt, pr))
     return await _wait(job, ctx)
@@ -303,6 +312,27 @@ async def edit_model(
     from . import pipeline
     job = _start("edit", lambda pr: pipeline.edit(path, clean=clean, holes=fill_holes, smooth=smooth,
                                                   faces=target_faces, size_mm=size_mm, formats=formats))
+    return await _wait(job, ctx)
+
+
+@mcp.tool()
+async def quad_remesh_model(model: str, target_faces: int = 10000, bake_texture: bool = True,
+                            ctx: Context = None) -> list:
+    """Convert a model to clean quad topology with Blender (QuadriFlow) — runs Blender hidden.
+    Keeps the texture by re-baking it. Outputs OBJ + FBX (quads) and GLB."""
+    path = str(_resolve_file(model, MODEL_EXT))
+    from . import pipeline
+    job = _start("quad", lambda pr: pipeline.quad(path, target_faces, 2048 if bake_texture else 0))
+    return await _wait(job, ctx)
+
+
+@mcp.tool()
+async def rig_model(model: str, ctx: Context = None) -> list:
+    """Add an automatic humanoid skeleton (19 bones, Unity/Mixamo names) with skin weights, using
+    Blender in the background. Best for characters standing in T-pose or A-pose. Outputs FBX + GLB."""
+    path = str(_resolve_file(model, MODEL_EXT | {".fbx"}))
+    from . import pipeline
+    job = _start("rig", lambda pr: pipeline.rig(path))
     return await _wait(job, ctx)
 
 
