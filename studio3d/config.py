@@ -133,7 +133,10 @@ def patch_hf_downloads():
             try:
                 return original(*args, **kwargs)
             except Exception as e:  # noqa: BLE001
-                if not is_network_error(e) or time.time() >= deadline:
+                if not is_network_error(e):
+                    raise
+                if time.time() >= deadline:
+                    print("❌ انقطع الإنترنت — توقف التنزيل. أعد المحاولة لاحقاً وسيكمل من حيث توقف.", flush=True)
                     raise
                 delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
                 attempt += 1
