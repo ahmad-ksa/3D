@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "studio3d",
   "display_name": "Studio3D — مولّد المجسمات ثلاثية الأبعاد",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Generate 3D models locally on your NVIDIA GPU (photos, image or text to 3D), AI texturing, quad topology and automatic skeleton via Blender, and a model library Claude can reuse.",
   "long_description": "Requires Studio3D installed with: irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex",
   "author": {
@@ -11,16 +11,15 @@
   },
   "homepage": "https://github.com/ahmad-ksa/3D",
   "server": {
-    "type": "python",
-    "entry_point": "server/launch.py",
+    "type": "node",
+    "entry_point": "server/index.js",
     "mcp_config": {
-      "command": "${user_config.studio3d_dir}\\python\\tools\\python.exe",
+      "command": "node",
       "args": [
-        "${__dirname}\\server\\launch.py"
+        "${__dirname}/server/index.js"
       ],
       "env": {
-        "STUDIO3D_APP": "${user_config.studio3d_dir}\\app",
-        "PYTHONIOENCODING": "utf-8"
+        "STUDIO3D_DIR": "${user_config.studio3d_dir}"
       }
     }
   },
@@ -102,7 +101,10 @@
   "compatibility": {
     "platforms": [
       "win32"
-    ]
+    ],
+    "runtimes": {
+      "node": ">=16.0.0"
+    }
   },
   "license": "Proprietary"
 }
