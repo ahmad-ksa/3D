@@ -49,6 +49,27 @@ def _clusters_x(points, gap):
     return groups
 
 
+def _clusters_pts(points, gap):
+    """Like _clusters_x but returns the points of each group."""
+    pts = sorted(points, key=lambda p: p.x)
+    if not pts:
+        return []
+    groups, cur = [], [pts[0]]
+    for p in pts[1:]:
+        if p.x - cur[-1].x > gap:
+            groups.append(cur)
+            cur = [p]
+        else:
+            cur.append(p)
+    groups.append(cur)
+    return groups
+
+
+def _median(vals):
+    v = sorted(vals)
+    return v[len(v) // 2] if v else 0.0
+
+
 def _center_y(points, default):
     return sum(p.y for p in points) / len(points) if points else default
 
@@ -69,32 +90,33 @@ def measure(obj):
     def z_at(f):
         return zmin + f * H
 
-    def mean(g):
-        return sum(g) / len(g)
+    # legs: walk UP from the feet while the slice is split into a left and a right leg.
+    # The top of that run is the crotch - or the hem of a dress/skirt that hides the thighs.
+    def leg_pair(f):
+        groups = [g for g in _clusters_pts(_slice(vs, z_at(f), band), gap) if len(g) >= 6]
+        left = [g for g in groups if _median([p.x for p in g]) > cx]
+        right = [g for g in groups if _median([p.x for p in g]) <= cx]
+        if not left or not right:
+            return None
+        lg = min(left, key=lambda g: abs(_median([p.x for p in g]) - cx))
+        rg = min(right, key=lambda g: abs(_median([p.x for p in g]) - cx))
+        return lg, rg
 
-    def nearest(groups):
-        return mean(min(groups, key=lambda g: abs(mean(g) - cx)))
-
-    # crotch: highest level (in 20..60 % of height) where the body splits into 2 legs around the centre
-    crotch_f, legs = 0.47, None
-    f = 0.20
-    while f <= 0.60:
-        big = [g for g in _clusters_x(_slice(vs, z_at(f), band), gap) if len(g) >= 8]
-        left = [g for g in big if mean(g) > cx]
-        right = [g for g in big if mean(g) <= cx]
-        if left and right:
-            crotch_f = f
-            legs = (nearest(left), nearest(right))
+    top_f, started, f = None, False, 0.03
+    while f <= 0.62:
+        pair = leg_pair(f)
+        if pair:
+            started, top_f = True, f
+        elif started:
+            break
         f += 0.01
-    if legs is None:
-        legs = (cx + 0.09 * H, cx - 0.09 * H)
-    # leg x positions measured at knee height are more reliable
-    kz = z_at(crotch_f * 0.5)
-    knee = [g for g in _clusters_x(_slice(vs, kz, band), gap) if len(g) >= 5]
-    lg = [g for g in knee if mean(g) > cx]
-    rg = [g for g in knee if mean(g) <= cx]
-    if lg and rg:
-        legs = (mean(max(lg, key=len)), mean(max(rg, key=len)))
+    crotch_f = top_f if top_f is not None else 0.45
+    # leg positions measured on the shins (always visible)
+    shin = leg_pair(min(0.12, crotch_f * 0.5)) or leg_pair(crotch_f * 0.5)
+    if shin:
+        legs = tuple((_median([p.x for p in g]), _median([p.y for p in g])) for g in shin)
+    else:
+        legs = ((cx + 0.09 * H, cy), (cx - 0.09 * H, cy))
 
     # shoulders: widest slice in the upper body (arms in T/A pose)
     best_w, sh_f = -1, 0.78
@@ -114,9 +136,14 @@ def measure(obj):
 
     # torso half-width at chest level (central X cluster)
     chest_z = z_at(min(sh_f, 0.8) - 0.06)
-    torso = [g for g in _clusters_x(_slice(vs, chest_z, band), gap)]
-    central = min(torso, key=lambda g: abs(mean(g) - cx)) if torso else [cx - 0.1 * H, cx + 0.1 * H]
-    half_torso = max(0.05 * H, (max(central) - min(central)) / 2)
+    torso = _clusters_pts(_slice(vs, chest_z, band), gap)
+    if torso:
+        central = min(torso, key=lambda g: abs(_median([p.x for p in g]) - cx))
+        xs_c = [p.x for p in central]
+        half_torso = max(0.05 * H, (max(xs_c) - min(xs_c)) / 2)
+        body_y = _median([p.y for p in central])
+    else:
+        half_torso, body_y = 0.1 * H, cy
 
     if a_pose:  # hands are lower: find the outermost points instead
         hand_l, hand_r = xmax, xmin
@@ -124,7 +151,7 @@ def measure(obj):
     return {
         "H": H, "zmin": zmin, "cx": cx, "cy": cy,
         "crotch": z_at(crotch_f), "legs": legs, "shoulder": z_at(sh_f),
-        "hand_l": hand_l, "hand_r": hand_r, "half_torso": half_torso, "a_pose": a_pose,
+        "hand_l": hand_l, "hand_r": hand_r, "half_torso": half_torso, "a_pose": a_pose, "body_y": body_y,
         "vs": vs,
     }
 
@@ -145,8 +172,10 @@ def build_armature(m):
     H, cx = m["H"], m["cx"]
     vs = m["vs"]
 
-    def yc(z):
-        return _center_y(_slice(vs, z, H * 0.02), m["cy"])
+    by = m["body_y"]
+
+    def yc(z):  # spine, neck and head stay in one straight column (hair/ponytails must not bend it)
+        return by
 
     hips_z = m["crotch"] + 0.04 * H
     spine_z = hips_z + 0.10 * H
@@ -192,12 +221,12 @@ def build_armature(m):
         bone(f"{side}LowerArm", elbow, wrist, f"{side}UpperArm", True)
         bone(f"{side}Hand", wrist, hand_end, f"{side}LowerArm", True)
 
-        hip = Vector((leg_x, yc(hips_z), m["crotch"]))
+        lx, ly = leg_x
+        hip = Vector((lx, by, m["crotch"]))
         ankle_z = m["zmin"] + 0.06 * H
-        knee = Vector((leg_x, yc(m["crotch"] * 0.5 + ankle_z * 0.5) - 0.01 * H,
-                       (m["crotch"] + ankle_z) / 2))
-        ankle = Vector((leg_x, yc(ankle_z), ankle_z))
-        toe = Vector((leg_x, ankle.y - 0.08 * H, m["zmin"] + 0.01 * H))
+        knee = Vector((lx, (by + ly) / 2 - 0.01 * H, (m["crotch"] + ankle_z) / 2))
+        ankle = Vector((lx, ly, ankle_z))
+        toe = Vector((lx, ly - 0.08 * H, m["zmin"] + 0.01 * H))
         bone(f"{side}UpperLeg", hip, knee, "Hips")
         bone(f"{side}LowerLeg", knee, ankle, f"{side}UpperLeg", True)
         bone(f"{side}Foot", ankle, toe, f"{side}LowerLeg", True)
