@@ -82,13 +82,15 @@ def _download_progress(config, repo, patterns, label, stop):
             last = (done, el)
         speed = max(done - last[0], 0) / max(el - last[1], 1) if el > last[1] + 1 else 0
         gb = done / 1024 ** 3
-        if total:
+        parts = sum(1 for _ in folder.rglob("*.incomplete"))
+        left_files = f" — {parts} ملفات كبيرة لسه تنزل" if parts else ""
+        if total and done < total * 0.97:
             left = max(total - done, 0) / speed / 60 if speed > 0 else 0
             eta = f" — باقي تقريباً {left:.0f} دقيقة" if speed > 0 else ""
-            progress(min(done / total, 0.99) * 0.15,
+            progress(min(done / total, 0.97) * 0.15,
                      f"⬇️ تنزيل {label}: {gb:.1f} / {total / 1024 ** 3:.1f} GB{eta}")
-        else:
-            progress(0.0, f"⬇️ تنزيل {label}: {gb:.1f} GB…")
+        else:   # the hub's size list can be incomplete: just show what is done and what is left
+            progress(0.14, f"⬇️ تنزيل {label}: {gb:.1f} GB تم{left_files}…")
 
 
 def _complete(root: Path, patterns) -> bool:
