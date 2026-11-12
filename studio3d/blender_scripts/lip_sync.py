@@ -279,7 +279,7 @@ def add_teeth(rig, m, face=None):
     tree = None
     if face is not None:
         tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
-    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.17, 0.08, 0.035, 0.35,
+    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.09, 0.08, 0.035, 0.35,
                          arch=0.75)
     inside = _mouth_shell(rig, m, tree, "MouthInside", (0.035, 0.012, 0.012, 1), -0.5, 0.08, 0.075, 0.9)
     return [teeth, inside]
