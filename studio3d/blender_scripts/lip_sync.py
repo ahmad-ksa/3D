@@ -395,7 +395,7 @@ def add_eyelids(rig, face, eyes, skin):
     lids = []
     for n, e in enumerate(eyes):
         ex, ey, ez, ew, eh = e["x"], e["y"], e["z"], e["width"], e["height"]
-        rx, rz = 0.58 * ew, 0.58 * eh          # a bit bigger than the painted eye
+        rx, rz = 0.68 * ew, 0.66 * eh          # bigger than the painted eye and its outline
         nx, nz = 16, 10
 
         def skin_uv(x, z):
@@ -428,7 +428,10 @@ def add_eyelids(rig, face, eyes, skin):
                 half = rz * math.sqrt(max(0.0, 1 - u * u))
                 top = ez + half
                 z = top - 2 * half * t          # closed: from the top of the eye down to its bottom
-                front = surf(x, z, ey) - 0.012 * ew
+                # the lid sits just in front of the eye, but its top and side edges tuck under the
+                # skin, so the closed lid flows into the face with no visible rim
+                tuck = max(smoothstep(0.88, 1.0, abs(u)), smoothstep(0.12, 0.0, t))
+                front = surf(x, z, ey) + (-0.012 + 0.022 * tuck) * ew
                 shut_v.append((x, front, z))
                 # colour = the character's own skin just above this eye (same texture, same tone)
                 uvs.append(skin_uv(x, top + 0.14 * eh + 0.25 * (1 - t) * eh))
