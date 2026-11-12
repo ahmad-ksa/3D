@@ -200,7 +200,8 @@ def slit_jaw_weights(mesh, m, lower_edge):
             depth_below = mz - p.z
             half = 0.48 * w + 0.7 * depth_below          # the moving area widens towards the chin
             hx = 1 - smoothstep(0.55 * half, half, ax)
-            vz = 1 - smoothstep(0.8 * w, 1.3 * w, depth_below)  # fade out below the chin
+            # lips + teeth area move fully; below that it fades so the chin is not stretched long
+            vz = 1 - smoothstep(0.35 * w, 1.0 * w, depth_below)
             wt = hx * vz
         else:
             continue
@@ -594,9 +595,9 @@ def animate_shapes(rig, shapes, fps, max_deg, w):
             # world move: sideways (out for wide, in for round) + forward for round
             # opening also stretches the corners out and slightly up (a smile), less for "و"
             smile = o * (1 - rd)
-            dx = sx * (0.12 * wd - 0.12 * rd + 0.09 * smile) * w
+            dx = sx * (0.12 * wd - 0.12 * rd + 0.06 * smile) * w
             dy = -0.05 * rd * w
-            dz = 0.035 * smile * w
+            dz = 0.02 * smile * w
             pb.location = to_bone @ Vector((dx, dy, dz))
             pb.keyframe_insert("location", frame=i + 1)
     bpy.ops.object.mode_set(mode="OBJECT")
