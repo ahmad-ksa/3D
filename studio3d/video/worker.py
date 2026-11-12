@@ -51,7 +51,44 @@ def _download(config, repo: str, patterns=None, label=""):
     except Exception:  # noqa: BLE001
         pass
     progress(0.0, f"⬇️ تنزيل {label} لأول مرة (مرة وحدة بس)…")
-    return Path(snapshot_download(repo_id=repo, allow_patterns=patterns))
+    import threading
+    stop = threading.Event()
+    threading.Thread(target=_download_progress, args=(config, repo, patterns, label, stop), daemon=True).start()
+    try:
+        return Path(snapshot_download(repo_id=repo, allow_patterns=patterns))
+    finally:
+        stop.set()
+
+
+def _download_progress(config, repo, patterns, label, stop):
+    """Show "x / y GB" while a model downloads (the hub itself reports nothing to the app)."""
+    import fnmatch
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().model_info(repo, files_metadata=True)
+        total = sum((f.size or 0) for f in info.siblings
+                    if not patterns or any(fnmatch.fnmatch(f.rfilename, p) for p in patterns))
+    except Exception:  # noqa: BLE001
+        total = 0
+    folder = Path(config.MODELS_DIR) / "huggingface" / "hub" / ("models--" + repo.replace("/", "--"))
+    t0, last = time.time(), None
+    while not stop.wait(3.0):
+        try:
+            done = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file() and not f.is_symlink())
+        except OSError:
+            continue
+        el = max(time.time() - t0, 1)
+        if last is None:
+            last = (done, el)
+        speed = max(done - last[0], 0) / max(el - last[1], 1) if el > last[1] + 1 else 0
+        gb = done / 1024 ** 3
+        if total:
+            left = max(total - done, 0) / speed / 60 if speed > 0 else 0
+            eta = f" — باقي تقريباً {left:.0f} دقيقة" if speed > 0 else ""
+            progress(min(done / total, 0.99) * 0.15,
+                     f"⬇️ تنزيل {label}: {gb:.1f} / {total / 1024 ** 3:.1f} GB{eta}")
+        else:
+            progress(0.0, f"⬇️ تنزيل {label}: {gb:.1f} GB…")
 
 
 def _complete(root: Path, patterns) -> bool:
