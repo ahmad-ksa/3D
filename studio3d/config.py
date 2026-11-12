@@ -63,6 +63,8 @@ SHAPE_MODELS = {
 }
 TEXTURE_MODEL = {"repo": "tencent/Hunyuan3D-2", "subfolder": "hunyuan3d-paint-v2-0-turbo"}
 TEXT2IMAGE_MODEL = "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled"
+# pose guide for text-to-image (T-pose / A-pose characters ready for a skeleton), ~3 GB
+POSE_CONTROLNET_MODEL = "Tencent-Hunyuan/HunyuanDiT-v1.1-ControlNet-Diffusers-Pose"
 
 # ---------------------------------------------------------------------------
 # Quality presets (tuned for 8 GB laptop GPUs such as RTX 5050 / 4060)

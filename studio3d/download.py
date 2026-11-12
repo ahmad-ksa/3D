@@ -25,6 +25,9 @@ def download_models(include_text: bool = False):
     if include_text:
         print(f"⬇️  {config.TEXT2IMAGE_MODEL} (نص ← صورة)")
         snapshot_download(repo_id=config.TEXT2IMAGE_MODEL)
+        print(f"⬇️  {config.POSE_CONTROLNET_MODEL} (وضعية T / A)")
+        snapshot_download(repo_id=config.POSE_CONTROLNET_MODEL,
+                          allow_patterns=["config.json", "*.safetensors"])
     freed = config.remove_ckpt_duplicates()
     if freed:
         print(f"🧹 حُذفت نسخ مكررة ووفّرنا {freed} GB")

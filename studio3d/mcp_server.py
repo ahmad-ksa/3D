@@ -305,11 +305,15 @@ async def generate_from_text(
     formats: list[Format] = ["glb"],  # noqa: B006
     topology: Literal["tri", "quad"] = "tri",
     rig: bool = False,
+    pose: Literal["free", "t", "a"] = "free",
     ctx: Context = None,
 ) -> list:
     """Build a 3D model from an ENGLISH text description of ONE object
-    (e.g. 'a low-poly wooden treasure chest, game asset'). First use downloads ~10 GB."""
+    (e.g. 'a low-poly wooden treasure chest, game asset'). First use downloads ~10 GB.
+    pose: for characters — "t" forces a T-pose, "a" an A-pose (best with rig=True; first use
+    downloads the pose model ~3 GB); "free" lets the image model choose."""
     opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats, topology=topology, rig=rig)
+    opt.pose = pose
     from . import pipeline
     job = _start("text", lambda pr: pipeline.run("text", {}, prompt, opt, pr))
     return await _wait(job, ctx)

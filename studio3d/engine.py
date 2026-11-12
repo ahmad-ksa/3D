@@ -185,6 +185,10 @@ def text_ready() -> bool:
     return bool(snap) and _diffusers_ready(snap)
 
 
+def pose_ready() -> bool:
+    return bool(_local_snapshot(config.POSE_CONTROLNET_MODEL, ["*.safetensors"]))
+
+
 def models_status() -> dict:
     out = {}
     for kind, label in (("multiview", "من 4 صور"), ("single", "من صورة واحدة")):
@@ -289,6 +293,18 @@ def _load_t2i():
     return pipe
 
 
+def _load_t2i_pose():
+    torch = _torch()
+    from diffusers import HunyuanDiT2DControlNetModel, HunyuanDiTControlNetPipeline
+    _patch_progress_bars()
+    cn = HunyuanDiT2DControlNetModel.from_pretrained(config.POSE_CONTROLNET_MODEL, torch_dtype=torch.float16)
+    pipe = HunyuanDiTControlNetPipeline.from_pretrained(
+        config.TEXT2IMAGE_MODEL, controlnet=cn, torch_dtype=torch.float16)
+    if torch.cuda.is_available():
+        pipe.enable_model_cpu_offload()
+    return pipe
+
+
 # ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------
@@ -347,13 +363,23 @@ def generate_shape(image, kind: str, preset: str, seed: int, octree: int | None 
     return mesh
 
 
-def text_to_image(prompt: str, seed: int) -> Image.Image:
+def text_to_image(prompt: str, seed: int, pose: str = "free") -> Image.Image:
+    """pose: 'free' | 't' | 'a'. With t/a the image model follows a T/A-pose skeleton
+    (pose ControlNet), so the character comes out ready for the auto skeleton."""
     torch = _torch()
-    pipe = MANAGER.get(("t2i",), _load_t2i)
     gen = torch.Generator(device="cpu").manual_seed(int(seed))
     pos = ",白色背景,3D风格,最佳质量"
     neg = ("文本,特写,裁剪,出框,最差质量,低质量,JPEG伪影,PGLY,重复,病态,残缺,多余的手指,"
            "变异,畸形,模糊,糟糕的解剖学,糟糕的比例,多余的肢体")
+    if pose in ("t", "a"):
+        from . import poses
+        pipe = MANAGER.get(("t2i_pose",), _load_t2i_pose)
+        img = pipe(prompt=prompt[:180] + poses.PROMPT_HINT[pose] + pos, negative_prompt=neg + ",手臂下垂",
+                   control_image=poses.skeleton_image(pose, 1024), controlnet_conditioning_scale=1.0,
+                   num_inference_steps=25, width=1024, height=1024, generator=gen,
+                   return_dict=False)[0][0]
+        return img
+    pipe = MANAGER.get(("t2i",), _load_t2i)
     img = pipe(prompt=prompt[:200] + pos, negative_prompt=neg, num_inference_steps=25,
                pag_scale=1.3, width=1024, height=1024, generator=gen, return_dict=False)[0][0]
     return img

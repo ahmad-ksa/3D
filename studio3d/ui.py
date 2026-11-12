@@ -192,7 +192,7 @@ def _outputs():
 # Core pipeline used by every tab
 # ---------------------------------------------------------------------------
 def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, smooth, faces,
-         size_mm, seed, rand, formats, topology="tri", rig=False, progress=None):
+         size_mm, seed, rand, formats, topology="tri", rig=False, progress=None, pose="free"):
     if progress is None:
         progress = gr.Progress()
     _save_last_options([quality, texture, remove_bg, clean, holes, smooth, faces, size_mm, seed, rand,
@@ -201,7 +201,7 @@ def _run(kind, inputs: dict, prompt, quality, texture, remove_bg, clean, holes, 
                            clean=bool(clean), holes=bool(holes), smooth=int(smooth or 0),
                            faces=int(faces or 0), size_mm=float(size_mm or 0),
                            seed=int(seed if seed is not None else -1), randomize=bool(rand),
-                           formats=list(formats or []))
+                           formats=list(formats or []), pose=pose or "free")
     try:
         res = pipeline.run(kind, inputs, prompt, opt, lambda p, d: progress(p, desc=d))
     except Exception as e:  # noqa: BLE001
@@ -324,10 +324,13 @@ def gen_single(image, *opts, progress=gr.Progress(track_tqdm=True)):
     return _run("single", {"front": image}, None, *opts, progress=progress)
 
 
-def gen_text(prompt, *opts, progress=gr.Progress(track_tqdm=True)):
+POSE_CHOICES = [("حرة", "free"), ("T-pose (ذراعين مستقيمة للجنبين)", "t"), ("A-pose (ذراعين مايلة لتحت)", "a")]
+
+
+def gen_text(prompt, pose, *opts, progress=gr.Progress(track_tqdm=True)):
     if not prompt or not prompt.strip():
         raise gr.Error("اكتب وصفاً للمجسم.")
-    return _run("text", {}, prompt.strip(), *opts, progress=progress)
+    return _run("text", {}, prompt.strip(), *opts, progress=progress, pose=pose or "free")
 
 
 def retexture(mesh_file, image, remove_bg, progress=gr.Progress(track_tqdm=True)):
@@ -605,10 +608,13 @@ def build() -> gr.Blocks:
                                             placeholder="A wooden chair with curved legs",
                                             info="اكتب الوصف بالإنجليزية لأفضل نتيجة. "
                                                  "يتطلب تنزيل نموذج إضافي (~10GB) أول مرة.")
+                        tpose = gr.Radio(POSE_CHOICES, value="free", label="وضعية الشخصية",
+                                         info="T/A-pose تجبر الصورة على الوضعية (للشخصيات اللي بتسوي لها هيكل عظمي). "
+                                              "أول مرة يحمّل نموذج الوضعيات (~3GB).")
                         btn2, stop2, opts2 = _generate_block()
                     with gr.Column(scale=6):
                         out2 = _outputs()
-                ev2 = btn2.click(gen_text, [prompt, *opts2], list(out2))
+                ev2 = btn2.click(gen_text, [prompt, tpose, *opts2], list(out2))
                 stop2.click(stop_generation, None, None, cancels=[ev2])
 
             # ---- retexture ----

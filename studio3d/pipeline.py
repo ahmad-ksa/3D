@@ -25,6 +25,7 @@ class Options:
     formats: list = field(default_factory=lambda: ["glb", "stl"])
     topology: str = "tri"     # "tri" | "quad" (quad = QuadriFlow in Blender)
     rig: bool = False         # humanoid skeleton via Blender
+    pose: str = "free"        # text-to-3D only: "free" | "t" | "a" (T-pose / A-pose character)
 
 
 def gpu_lock() -> FileLock:
@@ -41,6 +42,7 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
     seed = engine.resolve_seed(opt.seed, opt.randomize)
     job = engine.new_job_dir(kind)
     meta = {"kind": kind, "prompt": prompt, "quality": opt.quality, "seed": seed, "texture": opt.texture,
+            "pose": opt.pose if kind == "text" else None,
             "post": {"clean": opt.clean, "holes": opt.holes, "smooth": opt.smooth, "faces": opt.faces,
                      "size_mm": opt.size_mm}}
 
@@ -49,7 +51,9 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
         engine.set_step_callback(None)
         if kind == "text":
             progress(0.05, "توليد صورة من النص…")
-            inputs = {"front": engine.text_to_image(prompt, seed)}
+            if opt.pose in ("t", "a"):
+                progress(0.05, "توليد صورة من النص بوضعية " + ("T-pose" if opt.pose == "t" else "A-pose") + "…")
+            inputs = {"front": engine.text_to_image(prompt, seed, opt.pose)}
 
         engine.check_cancel()
         progress(0.15, "إزالة الخلفية…")
