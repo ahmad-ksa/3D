@@ -307,14 +307,14 @@ def add_teeth(rig, m, face=None):
     tree = None
     if face is not None:
         tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
-    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.09, 0.08, 0.035, 0.35,
+    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.065, 0.08, 0.035, 0.35,
                          arch=0.75, teeth=10, free_edge="lo")
     # lower row: thinner, moves with the jaw, shows just above the lower lip
     lower = _mouth_shell(rig, m, tree, "TeethLower", (0.95, 0.95, 0.93, 1), -0.08, 0.035, 0.05, 0.35,
                          drop=0.07, bone="Jaw", teeth=12, free_edge="hi")
     # soft grey just behind each row: the thin gaps between teeth read as light lines, not black
     grey = (0.62, 0.6, 0.58, 1)
-    back_up = _mouth_shell(rig, m, tree, "TeethBack", grey, -0.065, 0.08, 0.045, 0.6, arch=0.75)
+    back_up = _mouth_shell(rig, m, tree, "TeethBack", grey, -0.045, 0.08, 0.045, 0.6, arch=0.75)
     back_lo = _mouth_shell(rig, m, tree, "TeethLowerBack", grey, -0.08, 0.01, 0.06, 0.6,
                            drop=0.07, bone="Jaw")
     inside = _mouth_shell(rig, m, tree, "MouthInside", (0.035, 0.012, 0.012, 1), -0.5, 0.08, 0.075, 0.9)
