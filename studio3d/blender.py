@@ -174,9 +174,11 @@ def quad_remesh(model_path: str, out_dir: str, target_faces: int = 10000, bake_s
 
 
 def auto_rig(model_path: str, out_dir: str, name: str = "model_rigged", formats=("fbx", "glb"),
-             max_faces: int = 60000) -> dict:
+             max_faces: int = 60000, tpose: bool = False) -> dict:
+    """tpose=True: also turn the character into a T-pose (arms straight out) and keep that as rest pose."""
     return run_script("auto_rig", {"input": str(model_path), "outdir": str(out_dir), "name": name,
-                                   "formats": list(formats), "max_faces": int(max_faces)}, log_dir=out_dir)
+                                   "formats": list(formats), "max_faces": int(max_faces),
+                                   "tpose": bool(tpose)}, log_dir=out_dir)
 
 
 def lip_sync(model_path: str, audio_path: str, out_dir: str, name: str = "model_talking",

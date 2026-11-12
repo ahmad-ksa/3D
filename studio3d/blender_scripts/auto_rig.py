@@ -118,16 +118,34 @@ def measure(obj):
     else:
         legs = ((cx + 0.09 * H, cy), (cx - 0.09 * H, cy))
 
-    # shoulders: widest slice in the upper body (arms in T/A pose)
-    best_w, sh_f = -1, 0.78
-    f = 0.55
-    while f <= 0.92:
+    # shoulders: walking DOWN from the head, the first height where the body gets much wider than
+    # the head (works for T-pose, A-pose and arms hanging down; the old "widest slice" picked the
+    # hands' height for A-pose characters and put the arm bones far too low)
+    def width(f):
         sl = _slice(vs, z_at(f), band)
-        if sl:
-            w = max(p.x for p in sl) - min(p.x for p in sl)
-            if w > best_w + 1e-6:
-                best_w, sh_f = w, f
+        return (max(p.x for p in sl) - min(p.x for p in sl)) if sl else 0.0
+
+    head_ws = [w for w in (width(x / 100) for x in range(90, 98)) if w > 0]
+    head_w = sorted(head_ws)[len(head_ws) // 2] if head_ws else 0.15 * H
+    jump_f, f = None, 0.90
+    while f >= 0.45:
+        if width(f) > 1.8 * head_w:
+            jump_f = f
+            break
+        f -= 0.01
+    best_w, wide_f = -1, 0.78
+    f = 0.45
+    while f <= 0.92:
+        w = width(f)
+        if w > best_w + 1e-6:
+            best_w, wide_f = w, f
         f += 0.01
+    # T-pose: the widest slice (arms straight out) is right where the body widens below the head.
+    # Otherwise (A-pose / arms down) the widest slice is at the hands -> use the head-jump height.
+    if jump_f is None or (best_w >= 0.75 * H and abs(wide_f - jump_f) <= 0.06):
+        sh_f = wide_f
+    else:
+        sh_f = jump_f
     sh_slice = _slice(vs, z_at(sh_f), band * 2)
     hand_l = max(p.x for p in sh_slice) if sh_slice else xmax
     hand_r = min(p.x for p in sh_slice) if sh_slice else xmin
@@ -301,6 +319,49 @@ def pose_test(rig, obj):
     return float((moved > 1e-4).mean())
 
 
+def to_tpose(rig, obj):
+    """Turn the character into a T-pose: arms straight out to the sides (horizontal), then make that
+    the rest pose of mesh + skeleton. Works for any input pose (arms down, A-pose, bent)."""
+    from mathutils import Matrix
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="POSE")
+    for pb in rig.pose.bones:
+        pb.rotation_mode = "QUATERNION"
+        pb.rotation_quaternion = (1, 0, 0, 0)
+        pb.location = (0, 0, 0)
+    bpy.context.view_layer.update()
+    moved = []
+    for side, sign in (("Left", 1), ("Right", -1)):
+        target = Vector((sign, 0, 0))
+        for name in (f"{side}UpperArm", f"{side}LowerArm", f"{side}Hand"):
+            pb = rig.pose.bones.get(name)
+            if pb is None:
+                continue
+            d = (pb.tail - pb.head)
+            if d.length < 1e-6:
+                continue
+            q = d.normalized().rotation_difference(target)
+            rot = Matrix.Translation(pb.head) @ q.to_matrix().to_4x4() @ Matrix.Translation(-pb.head)
+            pb.matrix = rot @ pb.matrix
+            bpy.context.view_layer.update()
+            moved.append(round(math.degrees(q.angle), 1))
+    bpy.ops.object.mode_set(mode="OBJECT")
+    # bake the pose into the mesh, then make it the new rest pose of the skeleton
+    mod = next((m for m in obj.modifiers if m.type == "ARMATURE"), None)
+    if mod is None:
+        raise RuntimeError("no armature modifier on the mesh")
+    C.select_only(obj)
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="POSE")
+    bpy.ops.pose.select_all(action="SELECT")
+    bpy.ops.pose.armature_apply(selected=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    new = obj.modifiers.new("Armature", "ARMATURE")
+    new.object = rig
+    return moved
+
+
 def main(args):
     C.reset_scene()
     obj = C.import_model(args["input"])
@@ -322,10 +383,14 @@ def main(args):
     rig = build_armature(m)
     warnings = skin(obj, rig)
     moved = pose_test(rig, obj)
+    tpose = None
+    if args.get("tpose"):
+        tpose = to_tpose(rig, obj)
     files = C.export([rig, obj], args["outdir"], args.get("name", "model_rigged"),
                      args.get("formats", ["fbx", "glb"]))
     return {"files": files, "bones": len(rig.data.bones), "warnings": warnings,
             "a_pose": m["a_pose"], "arm_test_moved_fraction": round(moved, 3),
+            "tpose_degrees": tpose,
             **C.face_stats(obj)}
 
 

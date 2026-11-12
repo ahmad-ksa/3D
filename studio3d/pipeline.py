@@ -25,7 +25,8 @@ class Options:
     formats: list = field(default_factory=lambda: ["glb", "stl"])
     topology: str = "tri"     # "tri" | "quad" (quad = QuadriFlow in Blender)
     rig: bool = False         # humanoid skeleton via Blender
-    pose: str = "free"        # text-to-3D only: "free" | "t" | "a" (T-pose / A-pose character)
+    pose: str = "free"        # "free" | "t" | "a". t: character ends in a T-pose (any input; skeleton
+                              # added in Blender, arms rotated straight out). a: text-to-3D image only
 
 
 def gpu_lock() -> FileLock:
@@ -125,6 +126,8 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
 
     st = mesh_tools.stats(final)
     warnings = [warning] if warning else []
+    if opt.pose == "t":
+        opt.rig = True        # the T-pose is made with the skeleton
     if opt.topology == "quad" or opt.rig:
         preview, extra = _blender_steps(preview, job, opt, progress, warnings, meta)
         files += extra
@@ -181,11 +184,15 @@ def _blender_steps(model_path, job, opt, progress, warnings, meta):
             warnings.append(f"فشل تحويل Quad: {str(e)[:200]}")
     if opt.rig:
         engine.check_cancel()
-        progress(0.98, "بناء الهيكل العظمي عبر Blender…")
+        tpose = opt.pose == "t"
+        progress(0.98, "بناء الهيكل العظمي" + (" وتحويل الشخصية إلى T-pose" if tpose else "") + " عبر Blender…")
         try:
-            r = blender.auto_rig(base, job)
+            r = blender.auto_rig(base, job, tpose=tpose)
             files += r["files"]
-            meta["rig"] = {k: r.get(k) for k in ("bones", "a_pose", "warnings", "arm_test_moved_fraction")}
+            if tpose:  # show the T-posed character in the viewer
+                base = next((f for f in r["files"] if f.endswith(".glb")), base)
+            meta["rig"] = {k: r.get(k) for k in ("bones", "a_pose", "warnings", "arm_test_moved_fraction",
+                                                 "tpose_degrees")}
         except engine.Cancelled:
             raise
         except Exception as e:  # noqa: BLE001

@@ -235,15 +235,17 @@ async def generate_from_images(
     formats: list[Format] = ["glb"],  # noqa: B006
     topology: Literal["tri", "quad"] = "tri",
     rig: bool = False,
+    pose: Literal["free", "t"] = "free",
     ctx: Context = None,
 ) -> list:
-    """Build a 3D model from 1-4 photos of the same object (front required; back/left/right
+    """pose="t": make the character T-pose (same look, arms straight out; adds a skeleton). Build a 3D model from 1-4 photos of the same object (front required; back/left/right
     improve accuracy). target_faces: 0 keeps full detail, 3000-30000 for game assets.
     size_mm: real-world size of the longest side (3D printing).
     topology='quad' gives clean all-quad topology (Blender QuadriFlow, OBJ/FBX keep quads).
     rig=true adds a humanoid skeleton (T/A-pose characters) and exports FBX for Unity/Unreal/Mixamo."""
     imgs = {"front": _image(front), "back": _image(back), "left": _image(left), "right": _image(right)}
     opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats, topology=topology, rig=rig)
+    opt.pose = pose
     from . import pipeline
     job = _start("multiview", lambda pr: pipeline.run("multiview", imgs, None, opt, pr))
     return await _wait(job, ctx)
@@ -259,17 +261,19 @@ async def generate_from_sheet(
     size_mm: float = 0,
     topology: Literal["tri", "quad"] = "tri",
     rig: bool = False,
+    pose: Literal["free", "t"] = "free",
     seed: Optional[int] = None,
     formats: list[Format] = ["glb"],  # noqa: B006
     ctx: Context = None,
 ) -> list:
-    """Build a 3D model from ONE character-sheet image that shows the 4 sides (front, back and two
+    """pose="t": make the character T-pose (same look, arms straight out; adds a skeleton). Build a 3D model from ONE character-sheet image that shows the 4 sides (front, back and two
     side views) in a row or a 2x2 grid. The figures are found, cropped, sized equally and assigned to
     front/back/left/right automatically."""
     from . import sheet as sh
     img = _image(sheet)
     views = sh.split(img, layout)
     opt = _options(quality, texture, target_faces, size_mm, 0, seed, formats, topology=topology, rig=rig)
+    opt.pose = pose
     from . import pipeline
     job = _start("multiview", lambda pr: pipeline.run("multiview", views, None, opt, pr))
     return await _wait(job, ctx)
@@ -287,11 +291,13 @@ async def generate_from_image(
     formats: list[Format] = ["glb"],  # noqa: B006
     topology: Literal["tri", "quad"] = "tri",
     rig: bool = False,
+    pose: Literal["free", "t"] = "free",
     ctx: Context = None,
 ) -> list:
-    """Build a 3D model from a single photo or drawing (object on a plain background works best)."""
+    """pose="t": make the character T-pose (same look, arms straight out; adds a skeleton). Build a 3D model from a single photo or drawing (object on a plain background works best)."""
     img = _image(image)
     opt = _options(quality, texture, target_faces, size_mm, smooth, seed, formats, topology=topology, rig=rig)
+    opt.pose = pose
     from . import pipeline
     job = _start("single", lambda pr: pipeline.run("single", {"front": img}, None, opt, pr))
     return await _wait(job, ctx)

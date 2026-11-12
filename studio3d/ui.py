@@ -235,11 +235,14 @@ def _friendly_error(e: Exception) -> str:
 # ---------------------------------------------------------------------------
 # Tab handlers
 # ---------------------------------------------------------------------------
-def gen_multiview(front, back, left, right, *opts, progress=gr.Progress(track_tqdm=True)):
+IMAGE_POSE_CHOICES = [("حرة (مثل الصورة)", "free"), ("T-pose (نفس الشكل، ذراعين مستقيمة)", "t")]
+
+
+def gen_multiview(front, back, left, right, pose, *opts, progress=gr.Progress(track_tqdm=True)):
     if front is None:
         raise gr.Error("الصورة الأمامية مطلوبة على الأقل.")
     inputs = {"front": front, "back": back, "left": left, "right": right}
-    return _run("multiview", inputs, None, *opts, progress=progress)
+    return _run("multiview", inputs, None, *opts, progress=progress, pose=pose or "free")
 
 
 # ---------------------------------------------------------------------------
@@ -318,10 +321,10 @@ def sheet_split(orig, mode, pts):
             "✅ تم التقسيم والتوزيع — راجع الجهات، واستخدم أزرار ⇄ إذا انعكس شيء")
 
 
-def gen_single(image, *opts, progress=gr.Progress(track_tqdm=True)):
+def gen_single(image, pose, *opts, progress=gr.Progress(track_tqdm=True)):
     if image is None:
         raise gr.Error("ارفع صورة أولاً.")
-    return _run("single", {"front": image}, None, *opts, progress=progress)
+    return _run("single", {"front": image}, None, *opts, progress=progress, pose=pose or "free")
 
 
 POSE_CHOICES = [("حرة", "free"), ("T-pose (ذراعين مستقيمة للجنبين)", "t"), ("A-pose (ذراعين مايلة لتحت)", "a")]
@@ -596,10 +599,13 @@ def build() -> gr.Blocks:
                             sheet_msg = gr.Markdown()
                         sheet_orig = gr.State(None)
                         sheet_pts = gr.State([])
+                        mpose = gr.Radio(IMAGE_POSE_CHOICES, value="free", label="وضعية الشخصية",
+                                         info="T-pose: يولّد نفس الشكل ثم يفرد الذراعين للجنبين (مع هيكل عظمي عبر Blender)")
                         btn, stop, opts = _generate_block()
                     with gr.Column(scale=6):
                         out = _outputs()
-                ev = btn.click(gen_multiview, [mv["front"], mv["back"], mv["left"], mv["right"], *opts], list(out))
+                ev = btn.click(gen_multiview, [mv["front"], mv["back"], mv["left"], mv["right"], mpose, *opts],
+                               list(out))
                 stop.click(stop_generation, None, None, cancels=[ev])
                 four = [mv["front"], mv["back"], mv["left"], mv["right"]]
                 sw_fb.click(lambda f, b, l, r: (b, f, l, r), four, four)
@@ -615,10 +621,12 @@ def build() -> gr.Blocks:
                 with gr.Row():
                     with gr.Column(scale=5):
                         img = gr.Image(type="pil", image_mode="RGBA", label="الصورة", height=240)
+                        spose = gr.Radio(IMAGE_POSE_CHOICES, value="free", label="وضعية الشخصية",
+                                         info="T-pose: يولّد نفس الشكل ثم يفرد الذراعين للجنبين (مع هيكل عظمي عبر Blender)")
                         btn1, stop1, opts1 = _generate_block()
                     with gr.Column(scale=6):
                         out1 = _outputs()
-                ev1 = btn1.click(gen_single, [img, *opts1], list(out1))
+                ev1 = btn1.click(gen_single, [img, spose, *opts1], list(out1))
                 stop1.click(stop_generation, None, None, cancels=[ev1])
 
             # ---- text ----
@@ -630,7 +638,7 @@ def build() -> gr.Blocks:
                                             info="اكتب الوصف بالإنجليزية لأفضل نتيجة. "
                                                  "يتطلب تنزيل نموذج إضافي (~10GB) أول مرة.")
                         tpose = gr.Radio(POSE_CHOICES, value="free", label="وضعية الشخصية",
-                                         info="T/A-pose تجبر الصورة على الوضعية (للشخصيات اللي بتسوي لها هيكل عظمي). "
+                                         info="T-pose: الصورة تتولد بالوضعية ثم تُضبط الذراعين بالهيكل العظمي. "
                                               "أول مرة يحمّل نموذج الوضعيات (~3GB).")
                         btn2, stop2, opts2 = _generate_block()
                     with gr.Column(scale=6):

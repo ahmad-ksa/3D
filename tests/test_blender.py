@@ -126,3 +126,44 @@ def test_mouth_teeth_and_eyelids(tmp_path):
     assert {"Teeth", "TeethLower", "MouthInside", "Eyelid0", "Eyelid1"} <= names
     lids = [m for m in gltf["meshes"] if m["name"].startswith("Eyelid")]
     assert all(p.get("targets") for m in lids for p in m["primitives"])  # the Blink shape key
+
+
+def humanoid_apose():
+    """Same body, arms hanging ~50 degrees down (A-pose)."""
+    def cap(r, h, center, rot=None):
+        c = trimesh.creation.capsule(height=h, radius=r, count=[16, 16])
+        c.apply_transform(trimesh.transformations.rotation_matrix(-np.pi / 2, [1, 0, 0]))  # along y
+        if rot is not None:
+            c.apply_transform(trimesh.transformations.rotation_matrix(rot, [0, 0, 1]))
+        c.apply_translation(center)
+        return c
+    a = np.radians(40)  # angle from vertical
+    L = 0.62
+    parts = [cap(0.18, 0.55, [0, 1.15, 0]),
+             trimesh.creation.icosphere(3, radius=0.14).apply_translation([0, 1.62, 0]),
+             cap(0.08, 0.78, [0.11, 0.48, 0]), cap(0.08, 0.78, [-0.11, 0.48, 0])]
+    for s in (1, -1):
+        sh = np.array([s * 0.22, 1.40, 0])
+        mid = sh + np.array([s * np.sin(a), -np.cos(a), 0]) * (L / 2 + 0.04)
+        parts.append(cap(0.06, L, mid, rot=s * a))
+    m = trimesh.util.concatenate(parts)
+    v = m.voxelized(0.02).fill().marching_cubes
+    v.apply_scale(0.02)
+    return v
+
+
+def test_rig_to_tpose(tmp_path):
+    src = tmp_path / "apose.glb"
+    m = humanoid_apose()
+    m.export(src)
+    before = trimesh.load(src, force="mesh")
+    r = blender.auto_rig(str(src), tmp_path / "r", tpose=True)
+    assert r["tpose_degrees"] and max(r["tpose_degrees"]) > 25      # arms really rotated up
+    out = trimesh.load(next(f for f in r["files"] if f.endswith(".glb")), force="mesh")
+    # arm span grows a lot, height stays, and the hands end up near shoulder height
+    span_b = before.bounds[1][0] - before.bounds[0][0]
+    span_a = out.bounds[1][0] - out.bounds[0][0]
+    assert span_a > 1.3 * span_b
+    v = out.vertices
+    tips = v[np.abs(v[:, 0]) > 0.8 * np.abs(v[:, 0]).max()]
+    assert abs(np.median(tips[:, 1]) - 1.40) < 0.15
