@@ -34,7 +34,7 @@ const app = path.join(dir, 'app');
 log(`starting ${python} -m studio3d.mcp_server (cwd ${app})`);
 
 const child = spawn(python, ['-m', 'studio3d.mcp_server'], {
-  cwd: app,
+  cwd: dir,  // not the app folder, so updates can replace it
   stdio: ['pipe', 'pipe', 'pipe'],
   windowsHide: true,
   env: { ...process.env, PYTHONPATH: app, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },

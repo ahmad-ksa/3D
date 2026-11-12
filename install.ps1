@@ -63,10 +63,12 @@ Check 'pip upgrade'
 
 # --- 2. Studio3D source -----------------------------------------------------
 Step 2 'Studio3D program files'
-if (Test-Path $App) { Remove-Item -Recurse -Force $App }
+# Update in place: the folder may be in use (Studio3D or the Claude extension running),
+# so files are overwritten instead of deleting the folder.
+New-Item -ItemType Directory -Force -Path $App | Out-Null
 if ($env:STUDIO3D_SRC) {
     # local source folder (used by automated tests)
-    Copy-Item -Recurse -Path $env:STUDIO3D_SRC -Destination $App
+    Copy-Item -Path (Join-Path $env:STUDIO3D_SRC '*') -Destination $App -Recurse -Force
 } else {
     $srcZip = Join-Path $Tmp 'src.zip'
     $srcDir = Join-Path $Tmp 'src'
@@ -74,7 +76,7 @@ if ($env:STUDIO3D_SRC) {
     if (Test-Path $srcDir) { Remove-Item -Recurse -Force $srcDir }
     Expand-Archive -Path $srcZip -DestinationPath $srcDir -Force
     $extracted = Get-ChildItem -Path $srcDir -Directory | Select-Object -First 1
-    Move-Item -Path $extracted.FullName -Destination $App
+    Copy-Item -Path (Join-Path $extracted.FullName '*') -Destination $App -Recurse -Force
 }
 
 # --- 3. PyTorch (CUDA 12.8) -------------------------------------------------
