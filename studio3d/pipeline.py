@@ -209,7 +209,7 @@ def rig(model_path: str) -> dict:
             "mesh": mesh_tools.load_mesh(preview)}
 
 
-def lip_sync(model_path: str, audio_path: str, strength: float = 10) -> dict:
+def lip_sync(model_path: str, audio_path: str, strength: float = 5) -> dict:
     """Talking animation: jaw follows the loudness of an audio file (needs a rigged model)."""
     import shutil
     from . import blender

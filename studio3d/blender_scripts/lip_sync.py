@@ -683,7 +683,7 @@ def main(args):
         add_jaw(rig, f)
         n = jaw_weights(mesh, f)
     fps = int(args.get("fps", 30))
-    max_deg = float(args.get("max_open_degrees", 6))
+    max_deg = float(args.get("max_open_degrees", 5))
     shapes = None
     if mouth:
         try:

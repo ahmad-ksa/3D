@@ -674,7 +674,7 @@ def build() -> gr.Blocks:
                         last_r = gr.Button("استخدم آخر شخصية بهيكل عظمي", size="sm")
                         taudio = gr.Audio(label="الصوت (wav / mp3) — ارفع ملفاً أو سجّل بصوتك", type="filepath",
                                           sources=["upload", "microphone"], elem_classes="audio-in")
-                        tstr = gr.Slider(4, 20, value=10, step=1, label="قوة فتح الفم (درجات)")
+                        tstr = gr.Slider(2, 10, value=5, step=1, label="قوة فتح الفم (درجات)")
                         tbtn = gr.Button("👄 تحريك الفم", variant="primary")
                     with gr.Column(scale=6):
                         tout = _outputs()

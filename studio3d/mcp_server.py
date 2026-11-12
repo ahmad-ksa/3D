@@ -367,7 +367,7 @@ async def rig_model(model: str, ctx: Context = None) -> list:
 
 
 @mcp.tool()
-async def lip_sync_model(model: str, audio: str, strength_degrees: float = 10, ctx: Context = None) -> list:
+async def lip_sync_model(model: str, audio: str, strength_degrees: float = 5, ctx: Context = None) -> list:
     """Make a rigged character talk: finds the mouth on the texture, opens a slit there (white
     shows behind it like teeth), and animates jaw + mouth corners from the voice in an audio file
     (open for "aa", wide for "ee", round for "oo"; any language, offline)
