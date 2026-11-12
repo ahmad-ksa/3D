@@ -219,24 +219,15 @@ def slit_jaw_weights(mesh, m, lower_edge):
     return n
 
 
-def add_teeth(rig, m, face=None):
-    """A thin white shell that follows the face just behind the slit.
-
-    Closed mouth: hidden under the skin. Open mouth: white shows through the
-    slit and grows with the opening (like teeth), nothing else is drawn.
-    """
-    from mathutils.bvhtree import BVHTree
+def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness):
+    """A thin surface that follows the face from behind, attached to the head."""
     mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
-    tree = None
-    if face is not None:
-        dg = bpy.context.evaluated_depsgraph_get()
-        tree = BVHTree.FromObject(face, dg)
     nx, nz = 20, 12
     xs = [mx - 0.5 * w + 1.0 * w * i / (nx - 1) for i in range(nx)]
-    zs = [mz - 0.45 * w + 0.5 * w * j / (nz - 1) for j in range(nz)]
+    zs = [mz + z_from * w + (z_to - z_from) * w * j / (nz - 1) for j in range(nz)]
     verts, faces, front = [], [], []
-    for j, z in enumerate(zs):
-        for i, x in enumerate(xs):
+    for z in zs:
+        for x in xs:
             y, ok = my, tree is None
             if tree is not None:
                 hit = tree.ray_cast(Vector((x, my - 10.0, z)), Vector((0, 1, 0)))
@@ -246,7 +237,7 @@ def add_teeth(rig, m, face=None):
                     ok = hit[1].y < -0.45 and abs(hit[0].y - my) < 0.6 * w
             # deeper towards the corners so skin sliding sideways never uncovers it
             ax = min(abs(x - mx) / (0.5 * w), 1.0)
-            verts.append((x, y + (0.035 + 0.12 * ax * ax) * w, z))
+            verts.append((x, y + (depth + 0.12 * ax * ax) * w, z))
             front.append(ok)
     for j in range(nz - 1):
         for i in range(nx - 1):
@@ -254,18 +245,18 @@ def add_teeth(rig, m, face=None):
             quad = (a0, a0 + 1, a0 + nx + 1, a0 + nx)
             if all(front[k] for k in quad):
                 faces.append(quad)
-    me = bpy.data.meshes.new("Teeth")
+    me = bpy.data.meshes.new(name)
     me.from_pydata(verts, [], faces)
     me.update()
-    t = bpy.data.objects.new("Teeth", me)
+    t = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(t)
-    mat = bpy.data.materials.new("Teeth")
+    mat = bpy.data.materials.new(name)
     mat.use_nodes = True
+    mat.use_backface_culling = False
     bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    bsdf.inputs["Base Color"].default_value = (0.97, 0.97, 0.95, 1)
-    bsdf.inputs["Roughness"].default_value = 0.35
+    bsdf.inputs["Base Color"].default_value = color
+    bsdf.inputs["Roughness"].default_value = roughness
     t.data.materials.append(mat)
-    # rigidly attached to the head (keep its world position)
     keep = t.matrix_world.copy()
     t.parent = rig
     t.parent_type = "BONE"
@@ -273,6 +264,21 @@ def add_teeth(rig, m, face=None):
     bpy.context.view_layer.update()
     t.matrix_world = keep
     return t
+
+
+def add_teeth(rig, m, face=None):
+    """Behind the slit: a white band at the top (teeth) and dark inside under it.
+
+    Closed mouth: both hidden under the skin. Open mouth: white top + dark mouth
+    show through the opening and grow with it. Real geometry, nothing painted.
+    """
+    from mathutils.bvhtree import BVHTree
+    tree = None
+    if face is not None:
+        tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
+    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.16, 0.08, 0.035, 0.35)
+    inside = _mouth_shell(rig, m, tree, "MouthInside", (0.035, 0.012, 0.012, 1), -0.5, 0.08, 0.075, 0.9)
+    return [teeth, inside]
 
 
 def add_corners(rig, mesh, m):
@@ -481,8 +487,8 @@ def main(args):
     files = []
     C.select_only(rig, mesh)
     mesh.select_set(True)
-    if teeth is not None:
-        teeth.select_set(True)
+    for t in teeth or []:
+        t.select_set(True)
     glb = os.path.join(out, f"{name}.glb")
     bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_animations=True)
     files.append(glb)
