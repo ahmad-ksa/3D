@@ -167,11 +167,21 @@ def _load_i2v(snap: Path):
         pipe.transformer.enable_layerwise_casting(storage_dtype=torch.float8_e4m3fn,
                                                   compute_dtype=torch.bfloat16)
         pipe.enable_model_cpu_offload()
-    try:
-        pipe.vae.enable_tiling()
-    except Exception:  # noqa: BLE001
-        pass
+    _maybe_tiling(pipe.vae)
     return pipe
+
+
+def _maybe_tiling(vae) -> bool:
+    """Tiled VAE saves memory, but in diffusers 0.35 the tiled path skips the patchify step of the
+    Wan2.2 VAE (patch_size=2) -> "expected input ... to have 12 channels, but got 3". Only tile VAEs
+    without patch_size (Wan2.1 style); the Wan2.2 VAE decodes frame by frame anyway."""
+    if getattr(vae.config, "patch_size", None):
+        return False
+    try:
+        vae.enable_tiling()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def run_i2v(pipe, a: dict, emb) -> list:

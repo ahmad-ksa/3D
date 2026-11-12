@@ -211,6 +211,14 @@ img = sys.argv[1]
 Image.new("RGB", (80, 48), (120, 30, 200)).save(img)
 frames = worker.run_i2v(pipe, {"image": img, "width": 64, "height": 64, "frames": 9, "steps": 2}, emb)
 assert len(frames) == 9 and np.asarray(frames[0]).shape == (64, 64, 3)
+# Wan2.2 VAE (patch_size=2): tiling must stay off (diffusers 0.35 tiled encode skips patchify)
+vae22 = AutoencoderKLWan(base_dim=8, z_dim=4, in_channels=12, out_channels=12, patch_size=2,
+                         dim_mult=[1, 1, 1, 1], num_res_blocks=1, temperal_downsample=[False, True, True],
+                         latents_mean=[0.0] * 4, latents_std=[1.0] * 4, is_residual=True)
+assert worker._maybe_tiling(vae22) is False and not vae22.use_tiling
+assert worker._maybe_tiling(vae) is True
+x = torch.randn(1, 3, 5, 288, 288)
+vae22.encode(x)          # full-size frame encodes through patchify without the tiling bug
 print("WORKER-OK")
 """
 
