@@ -69,11 +69,16 @@ def skeleton_image(pose: str, size: int = 1024) -> Image.Image:
         d.line([pts[a], pts[b]], fill=c, width=width)
     r = max(4, size // 120)
     for i, (x, y) in enumerate(pts):
-        d.ellipse([x - r, y - r, x + r, y + r], fill=COLORS[i])
+        rr = r * 1.6 if i in (0, 14, 15, 16, 17) else r   # nose / eyes / ears: front view
+        d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=COLORS[i])
     return img
 
 
 PROMPT_HINT = {
-    "t": "，全身，正面，T字姿势，双臂水平伸直，站立",            # full body, front, T-pose, arms straight out
-    "a": "，全身，正面，A字姿势，双臂自然斜向下张开，站立",       # full body, front, A-pose
+    # full body, FRONT view facing the camera (face visible), T-pose, arms straight out
+    "t": "，正面视角，面向镜头，看着镜头，脸部清晰，全身，T字姿势，双臂水平伸直，站立",
+    "a": "，正面视角，面向镜头，看着镜头，脸部清晰，全身，A字姿势，双臂自然斜向下张开，站立",
 }
+
+# the image model tends to draw T-posed people from behind: forbid it explicitly
+NEGATIVE_HINT = ",背面,背影,背对镜头,后视图,看不到脸"

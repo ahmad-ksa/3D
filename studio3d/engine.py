@@ -408,34 +408,15 @@ def _checkpoint_parts(kind: str, variant: str) -> set:
 
 def _load_shape(kind: str, variant: str):
     torch = _torch()
-    import hy3dgen.shapegen.pipelines as hp
     from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
 
     _patch_progress_bars()
     spec = config.SHAPE_MODELS[kind]
     device = "cuda" if torch.cuda.is_available() else "cpu"
     with config.local_only(shape_ready(kind, variant)):
-        parts = _checkpoint_parts(kind, variant)
-        orig = hp.instantiate_from_config
-
-        def fast_instantiate(cfg, **kw):
-            target = str(cfg.get("target", "")).lower() if isinstance(cfg, dict) else ""
-            name = target.rsplit(".", 1)[-1]
-            is_dit = name.endswith("dit") or ".denoisers." in target
-            is_cond = name.endswith("imageencoder") and "vae" not in target
-            strict_part = ("model" in parts and is_dit) or ("conditioner" in parts and is_cond)
-            if strict_part:
-                with no_random_init():
-                    return orig(cfg, **kw)
-            return orig(cfg, **kw)
-
-        hp.instantiate_from_config = fast_instantiate
-        try:
-            pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-                spec["repo"], subfolder=spec[variant], use_safetensors=True, device=device,
-            )
-        finally:
-            hp.instantiate_from_config = orig
+        pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+            spec["repo"], subfolder=spec[variant], use_safetensors=True, device=device,
+        )
     # FlashVDM: much faster & lighter mesh decoding.
     pipe.enable_flashvdm(mc_algo="mc")
     if kind == "multiview":
@@ -577,7 +558,7 @@ def text_to_image(prompt: str, seed: int, pose: str = "free") -> Image.Image:
         pipe = MANAGER.get(("t2i_pose",), _load_t2i_pose)
         # pose words first: the CLIP text encoder only reads the first 77 tokens
         img = pipe(prompt=poses.PROMPT_HINT[pose].lstrip("，") + "，" + prompt[:180] + pos,
-                   negative_prompt=neg + ",手臂下垂",
+                   negative_prompt=neg + ",手臂下垂" + poses.NEGATIVE_HINT,
                    control_image=poses.skeleton_image(pose, 1024), controlnet_conditioning_scale=1.0,
                    num_inference_steps=25, width=1024, height=1024, generator=gen,
                    return_dict=False)[0][0]

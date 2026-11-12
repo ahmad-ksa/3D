@@ -35,5 +35,6 @@ def test_text_to_image_uses_pose_controlnet(monkeypatch):
     engine.MANAGER._free()
     engine.text_to_image("a man in a suit", 1, pose="t")
     assert isinstance(calls["control_image"], Image.Image)
-    assert "T字姿势" in calls["prompt"]
+    assert calls["prompt"].startswith("正面视角")          # front view first (CLIP reads 77 tokens)
+    assert "T字姿势" in calls["prompt"] and "背面" in calls["negative_prompt"]
     engine.MANAGER._free()
