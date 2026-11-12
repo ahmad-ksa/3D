@@ -74,7 +74,11 @@ def _download_progress(config, repo, patterns, label, stop):
     t0, last = time.time(), None
     while not stop.wait(3.0):
         try:
-            done = sum(f.stat().st_size for f in folder.rglob("*") if f.is_file() and not f.is_symlink())
+            # finished files live in snapshots/ (on Windows as copies, the blob may stay too: don't
+            # count it twice); files still coming are blobs/*.incomplete
+            done = sum(f.stat().st_size for f in (folder / "snapshots").rglob("*")
+                       if f.is_file() and not f.is_symlink())
+            done += sum(f.stat().st_size for f in (folder / "blobs").glob("*.incomplete"))
         except OSError:
             continue
         el = max(time.time() - t0, 1)
