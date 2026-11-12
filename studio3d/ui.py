@@ -435,8 +435,14 @@ def video_scenes_preview(images, story, audio):
     rows = []
     for i in range(n):
         desc, secs = lines[i] if i < len(lines) else ("حركة طبيعية خفيفة", None)
-        img = f"صورة {min(i, max(n_img - 1, 0)) + 1}" if n_img else "⚠️ بدون صورة"
-        rows.append(f"{i + 1}. {img} — {desc or 'حركة طبيعية خفيفة'}" + (f" ({secs:g} ث)" if secs else ""))
+        m = storyboard._WHO.match(desc)
+        if m:
+            desc = desc[m.end():]
+            img = f"صورة «{m.group(1)}»"
+        else:
+            img = f"صورة {min(i, max(n_img - 1, 0)) + 1}" if n_img else "⚠️ بدون صورة"
+        short = (desc[:70] + "…") if len(desc) > 70 else desc
+        rows.append(f"{i + 1}. {img} — {short or 'حركة طبيعية خفيفة'}" + (f" ({secs:g} ث)" if secs else ""))
     tail = f"  \n🎵 الصوت {total:.0f} ثانية يتقسم على المشاهد" if total else ""
     return "**المشاهد:**  \n" + "  \n".join(rows) + tail
 
@@ -748,7 +754,7 @@ def build() -> gr.Blocks:
                     with gr.Column(scale=5):
                         vimgs = gr.File(label="1️⃣ الصور اللي تبي تحركها (صورة لكل مشهد بالترتيب — أو صورة وحدة لكل المشاهد)",
                                         file_count="multiple", file_types=["image"], type="filepath", height=120)
-                        vstory = gr.Textbox(label="2️⃣ الستوري بورد — كل سطر = مشهد (وصف الحركة، والثواني اختيارية بعد |)",
+                        vstory = gr.Textbox(label="2️⃣ الستوري بورد — كل سطر = مشهد: [اسم الشخصية] وصف الحركة | الثواني",
                                             lines=5, placeholder="the girl waves and smiles | 5\n"
                                                                  "she walks forward, camera follows\n"
                                                                  "close up, she sings happily | 4",

@@ -205,6 +205,25 @@ def parse_story_text(text: str) -> list:
     return scenes
 
 
+_WHO = re.compile(r"^\s*[\[【]\s*([^\]】]+?)\s*[\]】]\s*")
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"[\s_\-.]+", "", t).lower().replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+
+
+def _image_for(who, imgs: list, i: int, tagged: bool) -> Path:
+    """[name] tag -> image with that name in its file name; untagged stories use the images in order."""
+    if who:
+        w = _norm(who)
+        for p in imgs:
+            st = _norm(p.stem)
+            if w and (w in st or (st and st in w)):
+                return p
+        return imgs[0]
+    return imgs[0] if tagged else imgs[min(i, len(imgs) - 1)]
+
+
 def from_inputs(images: list, story_text: str, audio, lipsync: bool, work_dir: Path,
                 title: str = "video") -> Path:
     """Build a storyboard.json from the video tab's boxes:
@@ -232,8 +251,12 @@ def from_inputs(images: list, story_text: str, audio, lipsync: bool, work_dir: P
         for i in free:
             seg_lens[i] = rest / len(free) if free else 0
         start = 0.0
+    tagged = any(_WHO.match(d) for d, _ in lines)
     for i, (desc, secs) in enumerate(lines):
-        img = imgs[min(i, len(imgs) - 1)]
+        m = _WHO.match(desc)
+        if m:   # "[ريهاد] prompt": the image whose file name has that name
+            desc = desc[m.end():].strip()
+        img = _image_for(m.group(1) if m else None, imgs, i, tagged)
         sc = {"image": str(img), "prompt": desc}
         if audio:
             length = seg_lens[i]

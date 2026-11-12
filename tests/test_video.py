@@ -263,3 +263,17 @@ def test_runner_music_scene_loops_motion(tmp_path, monkeypatch):
     r = runner.generate(path, "480p", worker=fake_worker)
     assert calls == ["i2v"]                       # no lip sync for music
     assert abs(r["seconds"] - 7.0) < 0.4          # 5 s motion looped under 7 s of music
+
+
+def test_story_lines_pick_image_by_character_name(tmp_path):
+    a = tmp_path / "الأب.png"
+    b = tmp_path / "Rehad ريهاد.png"
+    for p in (a, b):
+        Image.new("RGB", (320, 180), (90, 90, 90)).save(p)
+    song = _wav(tmp_path / "song.wav", 6.0)
+    path = sb.from_inputs([a, b], "[ريهاد] she sings | 2\n[الاب] he plays guitar | 1.5\n[ريهاد] she jumps | 2.5",
+                          song, True, tmp_path / "w")
+    s = sb.load(path)
+    assert [x.image.name for x in s.scenes] == [b.name, a.name, b.name]
+    assert s.scenes[0].prompt == "she sings"
+    assert abs(media.duration(s.scenes[1].audio) - 1.5) < 0.1
