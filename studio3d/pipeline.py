@@ -239,7 +239,13 @@ def _find_mouth_blender(model_path: str):
         return None
     if not m or not m.get("found"):
         return None
-    return {"x": m["x"], "y": -m["z"], "z": m["y"], "width": m["width"]}
+    out = {"x": m["x"], "y": -m["z"], "z": m["y"], "width": m["width"]}
+    eyes = [{"x": e["x"], "y": -e["z"], "z": e["y"], "width": e["width"], "height": e["height"]}
+            for e in m.get("eyes") or []]
+    if len(eyes) == 2:
+        out["eyes"] = eyes
+        out["skin"] = m.get("skin")
+    return out
 
 
 def _is_network(e: Exception) -> bool:

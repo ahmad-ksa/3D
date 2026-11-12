@@ -323,6 +323,181 @@ def add_teeth(rig, m, face=None):
     return [teeth, lower, back_up, back_lo, inside]
 
 
+def _srgb_to_linear(c):
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _texture_image(mat):
+    if mat is None or not mat.use_nodes:
+        return None
+    for nd in mat.node_tree.nodes:
+        if nd.type == "TEX_IMAGE" and nd.image is not None:
+            return nd.image
+    return None
+
+
+def _skin_tone(mat, uvs):
+    """Median texture colour (linear RGBA) at the given UVs, skipping dark pixels (lashes, brows)."""
+    import numpy as np
+    img = _texture_image(mat)
+    if img is None or not uvs:
+        return None
+    w, h = img.size
+    px = np.asarray(img.pixels[:], dtype=np.float32).reshape(h, w, img.channels)
+    cols = []
+    for u, v in uvs:
+        x = int((u % 1.0) * (w - 1))
+        y = int((v % 1.0) * (h - 1))
+        cols.append(px[y, x, :3])
+    cols = np.array(cols)
+    lum = cols.mean(axis=1)
+    keep = cols[lum >= np.percentile(lum, 40)]          # skin, not lashes or eyebrows
+    c = np.median(keep if len(keep) else cols, axis=0)
+    if img.colorspace_settings.name.lower().startswith("srgb"):
+        c = np.array([_srgb_to_linear(float(x)) for x in c])
+    return (float(c[0]), float(c[1]), float(c[2]), 1.0)
+
+
+def _lid_material(face_mat, color):
+    """Copy of the face material (same shine/roughness) with a flat skin colour."""
+    if face_mat is not None and face_mat.use_nodes:
+        mat = face_mat.copy()
+        mat.name = "Eyelid"
+        nt = mat.node_tree
+        bsdf = next((nd for nd in nt.nodes if nd.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is not None:
+            for link in list(bsdf.inputs["Base Color"].links):
+                nt.links.remove(link)
+            bsdf.inputs["Base Color"].default_value = color
+            return mat
+    mat = bpy.data.materials.new("Eyelid")
+    mat.use_nodes = True
+    bsdf = next(nd for nd in mat.node_tree.nodes if nd.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Base Color"].default_value = color
+    bsdf.inputs["Roughness"].default_value = 0.6
+    return mat
+
+
+def add_eyelids(rig, face, eyes, skin):
+    """Real eyelids: one per eye, skin coloured, hidden under the skin above the eye when open.
+
+    Each lid has a shape key "Blink": 0 = open (rolled up behind the skin at the top of the eye),
+    1 = closed (covers the eye just in front of it, with a dark lash line at its edge).
+    eyes: Blender coords {x, y (front surface), z, width, height}. Returns the lid objects.
+    """
+    from mathutils.bvhtree import BVHTree
+    tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
+    fdata, fw = face.data, face.matrix_world
+    uv_layer = fdata.uv_layers.active
+    face_mat = face.active_material
+    # the texture already has some light baked in; the lid gets real light, so tone it down a bit
+    col = tuple(_srgb_to_linear(c * 0.9) for c in skin) + (1.0,)
+    lids = []
+    for n, e in enumerate(eyes):
+        ex, ey, ez, ew, eh = e["x"], e["y"], e["z"], e["width"], e["height"]
+        rx, rz = 0.58 * ew, 0.58 * eh          # a bit bigger than the painted eye
+        nx, nz = 16, 10
+
+        def skin_uv(x, z):
+            hit = tree.ray_cast(Vector((x, ey - 10.0, z)), Vector((0, 1, 0)))
+            if hit[0] is None or uv_layer is None:
+                return None
+            poly = fdata.polygons[hit[2]]
+            vs = [fw @ fdata.vertices[i].co for i in poly.vertices]
+            lp = list(poly.loop_indices)
+            from mathutils.geometry import barycentric_transform
+            for k in range(1, len(vs) - 1):  # fan triangles
+                tri = (vs[0], vs[k], vs[k + 1])
+                uvt = [uv_layer.data[lp[q]].uv for q in (0, k, k + 1)]
+                b = barycentric_transform(hit[0], *tri, Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1)))
+                if min(b) >= -0.05:
+                    return (uvt[0] * b.x + uvt[1] * b.y + uvt[2] * b.z)[:]
+            return uv_layer.data[lp[0]].uv[:]
+
+        def surf(x, z, default):
+            hit = tree.ray_cast(Vector((x, ey - 10.0, z)), Vector((0, 1, 0)))
+            return hit[0].y if hit[0] is not None else default
+
+        open_v, shut_v, uvs = [], [], []
+        for j in range(nz):
+            # 0 = top edge, 1 = lid edge; the last row is a thin lash line
+            t = 0.95 * j / (nz - 2) if j < nz - 1 else 1.0
+            for i in range(nx):
+                u = -1 + 2 * i / (nx - 1)
+                x = ex + u * rx
+                half = rz * math.sqrt(max(0.0, 1 - u * u))
+                top = ez + half
+                z = top - 2 * half * t          # closed: from the top of the eye down to its bottom
+                front = surf(x, z, ey) - 0.012 * ew
+                shut_v.append((x, front, z))
+                # colour = the character's own skin just above this eye (same texture, same tone)
+                uvs.append(skin_uv(x, top + 0.14 * eh + 0.25 * (1 - t) * eh))
+                # open: the whole lid folded into the top edge, just under the skin
+                ztop = top + 0.04 * eh
+                open_v.append((x, surf(x, ztop, ey) + 0.05 * ew, ztop))
+        faces, lash = [], []
+        for j in range(nz - 1):
+            for i in range(nx - 1):
+                a0 = j * nx + i
+                faces.append((a0, a0 + 1, a0 + nx + 1, a0 + nx))
+                lash.append(j == nz - 2)
+        me = bpy.data.meshes.new(f"Eyelid{n}")
+        me.from_pydata(open_v, [], faces)
+        me.update()
+        ob = bpy.data.objects.new(f"Eyelid{n}", me)
+        bpy.context.scene.collection.objects.link(ob)
+        # skin tone = median colour of the character's own texture just above this eye
+        tone = _skin_tone(face_mat, [u for u in uvs if u is not None])
+        lid_mat = _lid_material(face_mat, tone if tone is not None else col)
+        ob.data.materials.append(lid_mat)
+        lm = bpy.data.materials.get("Lashes") or bpy.data.materials.new("Lashes")
+        lm.use_nodes = True
+        bsdf = next(nd for nd in lm.node_tree.nodes if nd.type == "BSDF_PRINCIPLED")
+        bsdf.inputs["Base Color"].default_value = (0.02, 0.012, 0.01, 1)
+        bsdf.inputs["Roughness"].default_value = 0.8
+        ob.data.materials.append(lm)
+        for poly, is_lash in zip(me.polygons, lash):
+            poly.material_index = 1 if is_lash else 0
+            poly.use_smooth = True
+        ob.shape_key_add(name="Basis")
+        key = ob.shape_key_add(name="Blink")
+        for i, co in enumerate(shut_v):
+            key.data[i].co = co
+        keep = ob.matrix_world.copy()
+        ob.parent = rig
+        ob.parent_type = "BONE"
+        ob.parent_bone = "Head"
+        bpy.context.view_layer.update()
+        ob.matrix_world = keep
+        lids.append(ob)
+    return lids
+
+
+def animate_blinks(lids, frames, fps, seed=7):
+    """Natural blinks every 2.5-5 s: close in ~0.1 s, open in ~0.15 s."""
+    import random
+    rnd = random.Random(seed)
+    times = []
+    t = rnd.uniform(0.6, 1.5)
+    total = frames / fps
+    while t < total - 0.3:
+        times.append(t)
+        t += rnd.uniform(2.5, 5.0)
+    for ob in lids:
+        kb = ob.data.shape_keys.key_blocks["Blink"]
+        kb.value = 0.0
+        kb.keyframe_insert("value", frame=1)
+        for bt in times:
+            f = 1 + bt * fps
+            for df, v in ((0, 0.0), (0.1 * fps, 1.0), (0.13 * fps, 1.0), (0.28 * fps, 0.0)):
+                kb.value = v
+                kb.keyframe_insert("value", frame=f + df)
+        ad = ob.data.shape_keys.animation_data
+        if ad and ad.action:
+            ad.action.name = "Talk"
+    return times
+
+
 def add_corners(rig, mesh, m):
     """Two bones on the mouth corners: out = wide ("ي"), in + forward = round ("و")."""
     mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
@@ -487,6 +662,7 @@ def main(args):
     f = face_frame(rig, mesh)
     mouth = args.get("mouth")
     teeth = None
+    lids = []
     if mouth:  # mouth line found on the texture: real slit + white teeth behind it
         f = dict(f, cx=mouth["x"], mouth_z=mouth["z"], front_y=mouth["y"])
         add_jaw_at_mouth(rig, f, mouth)
@@ -494,6 +670,9 @@ def main(args):
         n = slit_jaw_weights(mesh, mouth, lower)
         teeth = add_teeth(rig, mouth, mesh)
         add_corners(rig, mesh, mouth)
+        if args.get("eyes"):
+            lids = add_eyelids(rig, mesh, args["eyes"], args.get("skin") or (0.85, 0.7, 0.6))
+            teeth = teeth + lids
     else:
         add_jaw(rig, f)
         n = jaw_weights(mesh, f)
@@ -513,6 +692,7 @@ def main(args):
     else:
         levels, seconds = read_loudness(args["audio"], fps)
         animate(rig, levels, fps, max_deg)
+    blinks = animate_blinks(lids, len(levels), fps) if lids else []
 
     # sound in the timeline for preview/render inside Blender
     scene = bpy.context.scene
@@ -542,7 +722,8 @@ def main(args):
     bpy.ops.wm.save_as_mainfile(filepath=blend, copy=True)
     files.append(blend)
     return {"files": files, "jaw_vertices": n, "frames": len(levels), "seconds": round(seconds, 2),
-            "fps": fps, "slit": bool(mouth), "visemes": shapes is not None}
+            "fps": fps, "slit": bool(mouth), "visemes": shapes is not None,
+            "eyelids": len(lids), "blinks": len(blinks)}
 
 
 if __name__ == "__main__":

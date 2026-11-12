@@ -102,3 +102,27 @@ def test_lip_sync(tmp_path, monkeypatch):
     names = {Path(f).name for f in res["files"]}
     assert {"model_talking.glb", "model_talking.fbx", "model_talking.blend", "voice.wav"} <= names
     assert res["stats"]["frames"] == 45 and res["stats"]["jaw_vertices"] > 0
+
+
+def test_mouth_teeth_and_eyelids(tmp_path):
+    """Slit + teeth + blinking eyelids on a simple head (sphere at y=1.62, r=0.14)."""
+    import json
+    import struct
+    src = tmp_path / "human.glb"
+    humanoid().export(src)
+    r = blender.auto_rig(str(src), tmp_path / "r")
+    rigged = next(f for f in r["files"] if f.endswith(".glb"))
+    wav = tmp_path / "v.wav"
+    _wav(wav)
+    mouth = {"x": 0.0, "y": -0.126, "z": 1.56, "width": 0.08,
+             "eyes": [{"x": s * 0.05, "y": -0.124, "z": 1.66, "width": 0.04, "height": 0.04} for s in (1, -1)],
+             "skin": [0.9, 0.75, 0.62]}
+    res = blender.lip_sync(rigged, wav, tmp_path / "t", max_open_degrees=10, mouth=mouth)
+    assert res["slit"] and res["visemes"] and res["eyelids"] == 2
+    glb = Path(next(f for f in res["files"] if f.endswith(".glb"))).read_bytes()
+    n = struct.unpack("<I", glb[12:16])[0]
+    gltf = json.loads(glb[20:20 + n])
+    names = {nd.get("name") for nd in gltf["nodes"]}
+    assert {"Teeth", "TeethLower", "MouthInside", "Eyelid0", "Eyelid1"} <= names
+    lids = [m for m in gltf["meshes"] if m["name"].startswith("Eyelid")]
+    assert all(p.get("targets") for m in lids for p in m["primitives"])  # the Blink shape key

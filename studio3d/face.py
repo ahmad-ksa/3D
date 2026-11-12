@@ -128,5 +128,15 @@ def find_mouth(mesh, size: int = 1024, debug: dict | None = None) -> dict | None
     mz = float(near[:, 2].max()) if len(near) else float(v[:, 2].max())
     if debug is not None:
         debug.update({"image": img, "px": (mx, my, mw), "eyes": eyes, "face": face_box})
+    eye_list = []
+    for e in eyes or ():
+        ex, ey = to_x(e["cx"]), to_y(e["cy"])
+        ew = (e["x1"] - e["x0"]) / size * 2 * s
+        eh = (e["y1"] - e["y0"]) / size * 2 * s
+        near = v[(np.abs(v[:, 0] - ex) < ew / 2) & (np.abs(v[:, 1] - ey) < eh / 2)]
+        ez = float(near[:, 2].max()) if len(near) else mz
+        eye_list.append({"x": float(ex), "y": float(ey), "z": ez, "width": float(ew), "height": float(eh)})
+    skin_rgb = [float(x) for x in np.median(a[face], axis=0)]
     return {"x": float(mxm), "y": float(mym), "z": mz, "width": float(mw / size * 2 * s),
-            "eye_distance": float(eye_d / size * 2 * s), "found": found}
+            "eye_distance": float(eye_d / size * 2 * s), "found": found,
+            "eyes": eye_list, "skin": skin_rgb}
