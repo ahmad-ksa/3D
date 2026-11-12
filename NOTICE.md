@@ -29,3 +29,10 @@ Tencent Hunyuan is a trademark of Tencent; Studio3D is not affiliated with Tence
 ## Other libraries
 PyTorch (BSD), Gradio (Apache-2.0), trimesh (MIT), PyMeshLab (GPL-3.0, used as a separate
 library), rembg (MIT), diffusers / transformers (Apache-2.0).
+
+
+## 2D video
+- LatentSync (ByteDance, Apache-2.0) — code vendored in `studio3d/vendor_video` (face detection replaced
+  with Google MediaPipe Face Landmarker, Apache-2.0). Weights: ByteDance/LatentSync-1.5.
+- Wan2.2 TI2V-5B (Alibaba Wan team, Apache-2.0); 4-step distilled weights FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers.
+- ffmpeg via the imageio-ffmpeg package.

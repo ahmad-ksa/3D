@@ -92,6 +92,15 @@ Check 'requirements install'
 & $Py -m pip install --no-warn-script-location --disable-pip-version-check --no-deps --force-reinstall `
     "https://github.com/Tencent-Hunyuan/Hunyuan3D-2/archive/$HySha.zip"
 Check 'Hunyuan3D install'
+# 2D video from a storyboard: small extra libraries + a newer diffusers kept in its own folder
+# (only the video worker loads it, so the 3D models keep the diffusers version they were tested with)
+& $Py -m pip install --no-warn-script-location --disable-pip-version-check -r (Join-Path $App 'requirements-video.txt')
+Check 'video libraries install'
+& $Py -m pip install --no-warn-script-location --disable-pip-version-check --no-deps mediapipe==0.10.35
+Check 'mediapipe install'
+& $Py -m pip install --no-warn-script-location --disable-pip-version-check --no-deps --upgrade `
+    --target (Join-Path $Root 'video_libs') diffusers==0.35.2
+Check 'video diffusers install'
 
 # --- 5. Launcher + desktop shortcut -----------------------------------------
 Step 5 'Launcher'

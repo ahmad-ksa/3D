@@ -2,8 +2,8 @@
   "manifest_version": "0.3",
   "name": "studio3d",
   "display_name": "Studio3D — مولّد المجسمات ثلاثية الأبعاد",
-  "version": "0.5.1",
-  "description": "Generate 3D models locally on your NVIDIA GPU (photos, image or text to 3D), AI texturing, quad topology, automatic skeleton and talking mouth animation via Blender, and a model library Claude can reuse.",
+  "version": "0.6.0",
+  "description": "Generate 3D models locally on your NVIDIA GPU (photos, image or text to 3D), AI texturing, quad topology, automatic skeleton and talking mouth animation via Blender, a model library Claude can reuse, and 2D video clips from a storyboard (motion + lip sync).",
   "long_description": "Requires Studio3D installed with: irm https://raw.githubusercontent.com/ahmad-ksa/3D/main/install.ps1 | iex",
   "author": {
     "name": "ahmad-ksa",
@@ -66,7 +66,11 @@
     },
     {
       "name": "lip_sync_model",
-      "description": "Make a rigged character talk: adds a jaw bone and animates the mouth from an audio file (wav/mp3/ogg/flac; path, inbox file name or URL). The model must have a Studio3D skeleton (rig_model first). Outputs GLB + FBX with the animation and a .blend with the sound."
+      "description": "Make a rigged character talk: finds the mouth on the texture, opens a slit with teeth behind it, animates jaw + mouth corners from the voice (open/wide/round) and adds blinking eyelids. Audio: wav/mp3/ogg/flac (path, inbox file name or URL). Needs a Studio3D skeleton (rig_model first)."
+    },
+    {
+      "name": "generate_video_from_storyboard",
+      "description": "Make a 2D video clip from a storyboard.zip/.json: per scene an image, a motion description and optional voice (lip sync). Local Wan2.2 TI2V-5B + LatentSync 1.5; several minutes per scene on 8 GB."
     },
     {
       "name": "cancel_job",

@@ -396,6 +396,27 @@ def talk_tool(mesh_file, audio_file, strength, progress=gr.Progress()):
             f"✅ {st['seconds']} ثانية • {st['frames']} إطار — اضغط ▶️ تشغيل في العارض")
 
 
+def video_tool(sb_file, resolution, progress=gr.Progress()):
+    if sb_file is None:
+        raise gr.Error("ارفع ملف الستوري بورد (storyboard.zip أو storyboard.json).")
+    from .video import runner
+    try:
+        r = runner.generate(sb_file, resolution, progress=lambda p, d: progress(p, desc=d))
+    except engine.Cancelled:
+        raise gr.Error("تم إيقاف توليد الفيديو.")
+    except Exception as e:  # noqa: BLE001
+        log.error(traceback.format_exc())
+        raise gr.Error(f"تعذّر توليد الفيديو: {str(e)[:400]}")
+    talking = sum(1 for s in r["scenes"] if s["talking"])
+    return r["video"], (f"✅ {len(r['scenes'])} مشهد ({talking} فيها كلام) • {r['seconds']} ثانية  \n"
+                        f"<span class='hint'>محفوظ في: {r['job_dir']}</span>")
+
+
+def video_template():
+    from .video import storyboard
+    return str(storyboard.write_template(config.OUTPUT_DIR / "_templates" / "storyboard_example.zip"))
+
+
 def last_rigged():
     from . import library
     for e in library.list_models(with_thumb=False):
@@ -686,6 +707,30 @@ def build() -> gr.Blocks:
                         tout = _outputs()
                 last_r.click(last_rigged, None, tmesh2)
                 tbtn.click(talk_tool, [tmesh2, taudio, tstr], list(tout))
+
+            # ---- 2D video from a storyboard ----
+            with gr.Tab("🎬 فيديو"):
+                with gr.Row():
+                    with gr.Column(scale=5):
+                        gr.Markdown("ارفع ستوري بورد: لكل مشهد **صورة + وصف للحركة + صوت (اختياري)**. "
+                                    "البرنامج يحرّك كل مشهد، يزامن الشفايف مع الصوت، ويدمج الكل في فيديو واحد.  \n"
+                                    "أول مرة يحمّل نماذج الفيديو (~28GB). كل مشهد ياخذ عدة دقائق على كرت 8GB.",
+                                    elem_classes="hint")
+                        vfile = gr.File(label="الستوري بورد (storyboard.zip أو .json)", file_types=[".zip", ".json"],
+                                        type="filepath", height=110)
+                        vres = gr.Radio(["480p", "720p"], value="480p", label="الدقة",
+                                        info="480p أسرع بكثير ومناسبة لكرت 8GB")
+                        with gr.Row():
+                            vbtn = gr.Button("🎬 توليد الفيديو", variant="primary")
+                            vstop = gr.Button("⏹ إيقاف", variant="stop")
+                        vtpl = gr.Button("⬇️ نموذج ستوري بورد جاهز", size="sm")
+                        vtpl_file = gr.File(label="النموذج", interactive=False, height=80)
+                    with gr.Column(scale=6):
+                        vout = gr.Video(label="الفيديو", height=360)
+                        vinfo = gr.Markdown()
+                vev = vbtn.click(video_tool, [vfile, vres], [vout, vinfo])
+                vstop.click(stop_generation, None, None, cancels=[vev])
+                vtpl.click(video_template, None, vtpl_file)
 
             # ---- library ----
             with gr.Tab("📚 مكتبتي"):

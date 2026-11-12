@@ -124,6 +124,8 @@ def _job_response(job: Job):
     lines = [f"✅ job {job.id} done ({int(time.time() - job.started)}s).",
              f"Folder: {res['job_dir']}",
              "Files:"] + [f"- {f}" for f in res["files"]]
+    if res.get("summary"):
+        lines.append(res["summary"])
     st = res.get("stats", {})
     if st:
         lines.append(f"Faces: {st.get('faces')}, vertices: {st.get('vertices')}, "
@@ -133,6 +135,8 @@ def _job_response(job: Job):
     if "seed" in res:
         lines.append(f"Seed: {res['seed']}")
     out = ["\n".join(lines)]
+    if "mesh" not in res:
+        return out
     try:
         from .preview import png_bytes, render_grid
         out.append(Image(data=png_bytes(render_grid(res["mesh"], 320)), format="png"))
@@ -381,6 +385,31 @@ async def lip_sync_model(model: str, audio: str, strength_degrees: float = 5, ct
     aud = str(_resolve_file(audio, {".wav", ".mp3", ".ogg", ".flac"}))
     from . import pipeline
     job = _start("talk", lambda pr: pipeline.lip_sync(path, aud, strength_degrees))
+    return await _wait(job, ctx)
+
+
+@mcp.tool()
+async def generate_video_from_storyboard(storyboard: str, resolution: Literal["480p", "720p"] = "480p",
+                                         ctx: Context = None) -> list:
+    """Make a 2D video clip from a storyboard (local AI: Wan2.2 TI2V-5B motion + LatentSync lip sync).
+    storyboard: path / inbox name / URL of a storyboard.zip (storyboard.json + files) or storyboard.json.
+    storyboard.json: {"title": "...", "resolution": "480p",
+      "scenes": [{"image": "01.png", "prompt": "what moves in the scene (English)", "audio": "01.wav"},
+                 {"image": "02.png", "prompt": "...", "seconds": 4}]}
+    Each scene: image (required), prompt describing the motion, optional voice (the character's lips
+    follow it; the scene lasts as long as the voice), else "seconds" (1-8, default 5).
+    Slow on an 8 GB GPU: several minutes per scene; first use downloads ~28 GB. Returns the mp4 path."""
+    path = str(_resolve_file(storyboard, {".zip", ".json"}))
+    from .video import runner
+
+    def run(pr):
+        r = runner.generate(path, resolution, progress=pr)
+        talking = sum(1 for x in r["scenes"] if x["talking"])
+        return {"job_dir": r["job_dir"], "files": [r["video"]],
+                "stats": {}, "warning": None,
+                "summary": f"{len(r['scenes'])} scenes ({talking} talking), {r['seconds']} s"}
+
+    job = _start("video", run)
     return await _wait(job, ctx)
 
 

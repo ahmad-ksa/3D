@@ -1,0 +1,16 @@
+# Studio3D — extra libraries for the 2D video feature (storyboard -> video)
+# installed into the main environment by install.ps1 (all are prebuilt wheels: nothing compiled locally)
+imageio==2.38.1
+imageio-ffmpeg==0.8.1
+ffmpeg-python==0.2.0
+soundfile==0.14.0
+kornia==0.8.0
+more-itertools==11.2.1
+matplotlib==3.9.2
+ftfy==6.3.1
+wcwidth==0.9.4
+absl-py==2.5.1
+flatbuffers==25.12.19
+# installed separately by install.ps1:
+#   mediapipe==0.10.35            --no-deps   (face landmarks for lip sync; Apache-2.0)
+#   diffusers==0.35.2 --target <Studio3D>\video_libs --no-deps   (Wan2.2 support, used only by the video worker)

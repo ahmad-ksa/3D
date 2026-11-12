@@ -68,6 +68,14 @@ TEXT2IMAGE_MODEL = "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled"
 # pose guide for text-to-image (T-pose / A-pose characters ready for a skeleton), ~3 GB
 POSE_CONTROLNET_MODEL = "Tencent-Hunyuan/HunyuanDiT-v1.1-ControlNet-Diffusers-Pose"
 
+# 2D video from a storyboard (runs in a separate worker process, see studio3d/video)
+VIDEO_MODEL = "FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers"   # Wan2.2 TI2V-5B, 4-step distilled
+VIDEO_TEXT_MODEL = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"              # text encoder if the above lacks it
+LIPSYNC_MODEL = "ByteDance/LatentSync-1.5"                         # runs in ~8 GB (1.6 needs 18 GB)
+LIPSYNC_VAE = "stabilityai/sd-vae-ft-mse"
+# newer diffusers for the video model only (the 3D models keep diffusers 0.32)
+VIDEO_LIBS_DIR = Path(os.environ.get("STUDIO3D_VIDEO_LIBS", DATA_ROOT / "video_libs"))
+
 # ---------------------------------------------------------------------------
 # Quality presets (tuned for 8 GB laptop GPUs such as RTX 5050 / 4060)
 # ---------------------------------------------------------------------------

@@ -16,6 +16,8 @@ MODULES = [
     "numpy", "PIL", "cv2", "torch", "torchvision", "scipy", "trimesh", "pymeshlab", "xatlas",
     "onnxruntime", "rembg", "safetensors", "tokenizers", "transformers", "diffusers",
     "gradio", "uvicorn", "hy3dgen.shapegen", "hy3dgen.texgen",
+    # 2D video feature
+    "mediapipe", "kornia", "soundfile", "studio3d.video._ffmpeg_check",
 ]
 
 _STATES = {0: "مطفأ (Off)", 1: "مفعّل (On)", 2: "وضع التقييم (Evaluation)"}

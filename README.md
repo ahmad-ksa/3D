@@ -174,3 +174,20 @@ python -m studio3d.sac_check  # Smart App Control diagnostics
 Layout: `studio3d/engine.py` (models, one-at-a-time VRAM manager) · `ui.py` (Arabic Gradio UI) ·
 `mesh_tools.py` (clean/decimate/smooth/scale/export) · `vendor/custom_rasterizer` (pure PyTorch
 replacement for the CUDA extension) · `install.ps1` (SAC-friendly installer).
+
+
+## 🎬 فيديو 2D من ستوري بورد
+
+تبويب **🎬 فيديو** (أو أداة Claude `generate_video_from_storyboard`): ارفع `storyboard.zip` فيه `storyboard.json` والصور والأصوات.
+لكل مشهد: **صورة + وصف للحركة (بالإنجليزي أفضل) + صوت اختياري**. البرنامج يحرّك المشهد (Wan2.2 TI2V-5B، نسخة FastWan بـ4 خطوات)،
+ولو فيه صوت يزامن الشفايف معه (LatentSync 1.5)، ثم يدمج كل المشاهد في فيديو MP4 واحد.
+
+```json
+{"title": "قصتي", "resolution": "480p",
+ "scenes": [{"image": "01.png", "prompt": "the girl waves and smiles", "audio": "01.wav"},
+            {"image": "02.png", "prompt": "slow camera zoom in", "seconds": 4}]}
+```
+
+- أول مرة يحمّل نماذج الفيديو (~28GB) — أو مسبقاً: `Studio3D.cmd --download video`.
+- على كرت 8GB: كل مشهد ياخذ عدة دقائق. 480p أسرع بكثير من 720p.
+- النماذج تشتغل في عملية منفصلة بمكتبة diffusers أحدث (`video_libs`) عشان ما تتأثر نماذج الـ3D.

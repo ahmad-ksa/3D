@@ -32,3 +32,17 @@ def download_models(include_text: bool = False):
     if freed:
         print(f"🧹 حُذفت نسخ مكررة ووفّرنا {freed} GB")
     print("✅ اكتمل تنزيل النماذج.")
+
+
+def download_video_models():
+    """Models of the 2D video feature (~28 GB): Wan2.2 TI2V-5B (FastWan), LatentSync 1.5, face model."""
+    config.patch_hf_downloads()
+    from huggingface_hub import snapshot_download
+    print(f"⬇️  {config.VIDEO_MODEL} (فيديو، ~22 GB)")
+    snapshot_download(repo_id=config.VIDEO_MODEL)
+    print(f"⬇️  {config.LIPSYNC_MODEL} (مزامنة الشفايف)")
+    snapshot_download(repo_id=config.LIPSYNC_MODEL, allow_patterns=["latentsync_unet.pt", "whisper/tiny.pt"])
+    snapshot_download(repo_id=config.LIPSYNC_VAE, allow_patterns=["config.json", "diffusion_pytorch_model.safetensors"])
+    from .video import face_mp
+    face_mp.ensure_model()
+    print("✅ اكتمل تنزيل نماذج الفيديو.")

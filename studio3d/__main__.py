@@ -1,4 +1,4 @@
-"""Entry point:  python -m studio3d  [--no-window] [--port N] [--download [all]]"""
+"""Entry point:  python -m studio3d  [--no-window] [--port N] [--download [all|video]]"""
 from __future__ import annotations
 
 import argparse
@@ -57,7 +57,7 @@ def main():
     ap = argparse.ArgumentParser(prog="studio3d")
     ap.add_argument("--port", type=int, default=config.PORT)
     ap.add_argument("--no-window", action="store_true", help="لا تفتح نافذة تلقائياً")
-    ap.add_argument("--download", nargs="?", const="basic", choices=["basic", "all"],
+    ap.add_argument("--download", nargs="?", const="basic", choices=["basic", "all", "video"],
                     help="تنزيل النماذج مسبقاً ثم الخروج")
     args = ap.parse_args()
 
@@ -65,8 +65,11 @@ def main():
     log = logging.getLogger("studio3d")
 
     if args.download:
-        from .download import download_models
-        download_models(args.download == "all")
+        from .download import download_models, download_video_models
+        if args.download != "video":
+            download_models(args.download == "all")
+        if args.download in ("all", "video"):
+            download_video_models()
         return
 
     print("=" * 60)
