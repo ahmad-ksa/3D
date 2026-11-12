@@ -17,6 +17,7 @@ long as its audio and the character's lips follow it; without audio "seconds" (d
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import zipfile
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ class Scene:
     prompt: str
     audio: Path | None
     seconds: float
+    lipsync: bool = True     # False: the audio is only music/sound under the scene
 
 
 @dataclass
@@ -132,6 +134,7 @@ def load(path, work_dir: Path | None = None) -> Storyboard:
             prompt=prompt or "subtle natural movement, gentle breathing, cinematic",
             audio=_resolve(root, audio, AUDIO_EXT, "الصوت", i) if audio else None,
             seconds=min(MAX_SECONDS, max(MIN_SECONDS, secs)),
+            lipsync=bool(_pick(s, "lipsync", default=True)),
         ))
     return Storyboard(title=str(data.get("title") or "video"), resolution=res, scenes=scenes, root=root)
 
@@ -178,3 +181,73 @@ def write_template(dest: Path) -> Path:
             z.write(f, f.name)
     shutil.rmtree(tmp, ignore_errors=True)
     return dest
+
+
+_SECS = re.compile(r"[|\[(（]\s*(\d+(?:\.\d+)?)\s*(?:s|sec|ث|ثانية|ثواني)?\s*[\])）]?\s*$", re.I)
+_NUM = re.compile(r"^\s*(?:(?:scene|المشهد|مشهد)\s*)?\d*\s*[-.:)،]*\s*", re.I)
+
+
+def parse_story_text(text: str) -> list:
+    """One scene per non-empty line: "description | 5" (seconds optional).
+    Leading numbering like "1." or "المشهد 2:" is removed."""
+    scenes = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        secs = None
+        m = _SECS.search(line)
+        if m:
+            secs = float(m.group(1))
+            line = line[:m.start()].strip()
+        line = _NUM.sub("", line, count=1).strip() or line
+        scenes.append((line, secs))
+    return scenes
+
+
+def from_inputs(images: list, story_text: str, audio, lipsync: bool, work_dir: Path,
+                title: str = "video") -> Path:
+    """Build a storyboard.json from the video tab's boxes:
+    images  - one per scene, in order (fewer images than scenes: the last image is reused)
+    story   - one line per scene (motion description, optional "| seconds")
+    audio   - optional song / voice for the WHOLE clip: cut into one piece per scene
+    lipsync - the character's lips follow the audio (singing / talking)."""
+    from . import media
+    imgs = [Path(i) for i in (images or []) if i]
+    if not imgs:
+        raise StoryboardError("ارفع صورة واحدة على الأقل.")
+    lines = parse_story_text(story_text)
+    lines += [("", None)] * max(0, len(imgs) - len(lines))   # more images than lines: one scene each
+    work_dir = Path(work_dir) / "storyboard"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    scenes = []
+    seg_lens = [s for _, s in lines]
+    if audio:
+        total = media.duration(audio)
+        if total <= 0:
+            raise StoryboardError("تعذّر قراءة ملف الصوت.")
+        fixed = sum(x for x in seg_lens if x)
+        free = [i for i, x in enumerate(seg_lens) if not x]
+        rest = max(0.0, total - fixed)
+        for i in free:
+            seg_lens[i] = rest / len(free) if free else 0
+        start = 0.0
+    for i, (desc, secs) in enumerate(lines):
+        img = imgs[min(i, len(imgs) - 1)]
+        sc = {"image": str(img), "prompt": desc}
+        if audio:
+            length = seg_lens[i]
+            if length < 0.3 or start >= total - 0.05:
+                break
+            seg = work_dir / f"audio_{i + 1:02d}.wav"
+            media.cut_audio(audio, seg, start, length)
+            start += length
+            sc["audio"] = seg.name
+            sc["lipsync"] = bool(lipsync)
+        elif secs:
+            sc["seconds"] = secs
+        scenes.append(sc)
+    data = {"title": title, "scenes": scenes}
+    path = work_dir / "storyboard.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path

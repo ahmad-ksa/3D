@@ -55,10 +55,19 @@ def to_wav16k(src, dst) -> Path:
     return Path(dst)
 
 
-def normalize_clip(src, dst, width: int, height: int, seconds: float | None = None, audio=None) -> Path:
+def cut_audio(src, dst, start: float, length: float) -> Path:
+    """A piece of an audio file (start / length in seconds) as wav."""
+    _run(["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", src, "-ac", "2", "-ar", str(AUDIO_RATE),
+          "-c:a", "pcm_s16le", dst])
+    return Path(dst)
+
+
+def normalize_clip(src, dst, width: int, height: int, seconds: float | None = None, audio=None,
+                   loop_video: bool = False) -> Path:
     """Re-encode a clip to the common format (size, 25 fps, h264, aac stereo 48k).
-    Clips without a voice get a silent track so all scenes can be joined."""
-    args = ["-i", src]
+    Clips without a voice get a silent track so all scenes can be joined.
+    loop_video: repeat the (short) motion clip until the audio ends (music under a scene)."""
+    args = (["-stream_loop", "-1"] if loop_video else []) + ["-i", src]
     if audio is None:
         args += ["-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate={AUDIO_RATE}"]
     else:

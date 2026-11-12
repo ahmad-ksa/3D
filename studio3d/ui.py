@@ -399,20 +399,46 @@ def talk_tool(mesh_file, audio_file, strength, progress=gr.Progress()):
             f"✅ {st['seconds']} ثانية • {st['frames']} إطار — اضغط ▶️ تشغيل في العارض")
 
 
-def video_tool(sb_file, resolution, progress=gr.Progress()):
-    if sb_file is None:
-        raise gr.Error("ارفع ملف الستوري بورد (storyboard.zip أو storyboard.json).")
-    from .video import runner
+def video_tool(images, story, audio, lipsync, resolution, sb_file, progress=gr.Progress()):
+    from .video import runner, storyboard
     try:
-        r = runner.generate(sb_file, resolution, progress=lambda p, d: progress(p, desc=d))
+        if sb_file:                       # advanced: a ready storyboard.zip / .json
+            path = sb_file
+        else:
+            if not images:
+                raise gr.Error("ارفع صورة المشهد (أو صورة لكل مشهد).")
+            import uuid
+            work = config.OUTPUT_DIR / "_video_inputs" / uuid.uuid4().hex[:8]
+            imgs = [getattr(f, "name", f) for f in images]
+            path = storyboard.from_inputs(imgs, story or "", audio, bool(lipsync), work)
+        r = runner.generate(path, resolution, progress=lambda p, d: progress(p, desc=d))
+    except gr.Error:
+        raise
     except engine.Cancelled:
         raise gr.Error("تم إيقاف توليد الفيديو.")
     except Exception as e:  # noqa: BLE001
         log.error(traceback.format_exc())
         raise gr.Error(f"تعذّر توليد الفيديو: {str(e)[:400]}")
     talking = sum(1 for s in r["scenes"] if s["talking"])
-    return r["video"], (f"✅ {len(r['scenes'])} مشهد ({talking} فيها كلام) • {r['seconds']} ثانية  \n"
+    return r["video"], (f"✅ {len(r['scenes'])} مشهد ({talking} فيها كلام/غناء) • {r['seconds']} ثانية  \n"
                         f"<span class='hint'>محفوظ في: {r['job_dir']}</span>")
+
+
+def video_scenes_preview(images, story, audio):
+    from .video import media, storyboard
+    lines = storyboard.parse_story_text(story or "")
+    n_img = len(images or [])
+    n = max(len(lines), n_img, 1 if n_img else 0)
+    if not n:
+        return "ارفع صورة واكتب الستوري بورد — يطلع هنا تقسيم المشاهد."
+    total = media.duration(audio) if audio else 0
+    rows = []
+    for i in range(n):
+        desc, secs = lines[i] if i < len(lines) else ("حركة طبيعية خفيفة", None)
+        img = f"صورة {min(i, max(n_img - 1, 0)) + 1}" if n_img else "⚠️ بدون صورة"
+        rows.append(f"{i + 1}. {img} — {desc or 'حركة طبيعية خفيفة'}" + (f" ({secs:g} ث)" if secs else ""))
+    tail = f"  \n🎵 الصوت {total:.0f} ثانية يتقسم على المشاهد" if total else ""
+    return "**المشاهد:**  \n" + "  \n".join(rows) + tail
 
 
 def video_template():
@@ -720,23 +746,36 @@ def build() -> gr.Blocks:
             with gr.Tab("🎬 فيديو"):
                 with gr.Row():
                     with gr.Column(scale=5):
-                        gr.Markdown("ارفع ستوري بورد: لكل مشهد **صورة + وصف للحركة + صوت (اختياري)**. "
-                                    "البرنامج يحرّك كل مشهد، يزامن الشفايف مع الصوت، ويدمج الكل في فيديو واحد.  \n"
-                                    "أول مرة يحمّل نماذج الفيديو (~28GB). كل مشهد ياخذ عدة دقائق على كرت 8GB.",
-                                    elem_classes="hint")
-                        vfile = gr.File(label="الستوري بورد (storyboard.zip أو .json)", file_types=[".zip", ".json"],
-                                        type="filepath", height=110)
+                        vimgs = gr.File(label="1️⃣ الصور اللي تبي تحركها (صورة لكل مشهد بالترتيب — أو صورة وحدة لكل المشاهد)",
+                                        file_count="multiple", file_types=["image"], type="filepath", height=120)
+                        vstory = gr.Textbox(label="2️⃣ الستوري بورد — كل سطر = مشهد (وصف الحركة، والثواني اختيارية بعد |)",
+                                            lines=5, placeholder="the girl waves and smiles | 5\n"
+                                                                 "she walks forward, camera follows\n"
+                                                                 "close up, she sings happily | 4",
+                                            info="الإنجليزي يعطي نتيجة أفضل. بدون سطر = حركة طبيعية خفيفة.")
+                        vaudio = gr.Audio(label="3️⃣ الأغنية / الصوت (اختياري) — للفيديو كامل، يتقسم على المشاهد",
+                                          type="filepath", sources=["upload", "microphone"])
+                        vlip = gr.Checkbox(value=True, label="الشخصية تغني/تتكلم مع الصوت (تحريك الشفايف)",
+                                           info="اطفيه لو الصوت موسيقى بس")
                         vres = gr.Radio(["480p", "720p"], value="480p", label="الدقة",
                                         info="480p أسرع بكثير ومناسبة لكرت 8GB")
                         with gr.Row():
                             vbtn = gr.Button("🎬 توليد الفيديو", variant="primary")
                             vstop = gr.Button("⏹ إيقاف", variant="stop")
-                        vtpl = gr.Button("⬇️ نموذج ستوري بورد جاهز", size="sm")
-                        vtpl_file = gr.File(label="النموذج", interactive=False, height=80)
+                        with gr.Accordion("متقدم: ملف ستوري بورد جاهز (zip / json)", open=False):
+                            vfile = gr.File(label="storyboard.zip أو storyboard.json (يتجاهل الخانات فوق)",
+                                            file_types=[".zip", ".json"], type="filepath", height=90)
+                            vtpl = gr.Button("⬇️ نموذج ملف ستوري بورد", size="sm")
+                            vtpl_file = gr.File(label="النموذج", interactive=False, height=70)
+                        gr.Markdown("أول مرة يحمّل نماذج الفيديو (~28GB). كل مشهد ياخذ عدة دقائق على كرت 8GB.",
+                                    elem_classes="hint")
                     with gr.Column(scale=6):
+                        vplan = gr.Markdown("ارفع صورة واكتب الستوري بورد — يطلع هنا تقسيم المشاهد.")
                         vout = gr.Video(label="الفيديو", height=360)
                         vinfo = gr.Markdown()
-                vev = vbtn.click(video_tool, [vfile, vres], [vout, vinfo])
+                for comp in (vimgs, vstory, vaudio):
+                    comp.change(video_scenes_preview, [vimgs, vstory, vaudio], vplan)
+                vev = vbtn.click(video_tool, [vimgs, vstory, vaudio, vlip, vres, vfile], [vout, vinfo])
                 vstop.click(stop_generation, None, None, cancels=[vev])
                 vtpl.click(video_template, None, vtpl_file)
 

@@ -107,11 +107,14 @@ def generate(storyboard_path, resolution: str | None = None, seed: int = 0,
         def sub(a, b, label):
             return lambda p, txt: progress(lo + (hi - lo) * (a + (b - a) * p), f"المشهد {s.index}/{n}: {txt or label}")
 
-        voice = None
+        voice = music = None
         seconds = s.seconds
-        if s.audio:
+        if s.audio and s.lipsync:
             voice = media.to_wav16k(s.audio, d / "voice.wav")
             seconds = max(sbmod.MIN_SECONDS, media.duration(voice) or s.seconds)
+        elif s.audio:
+            music = s.audio
+            seconds = max(sbmod.MIN_SECONDS, media.duration(music) or s.seconds)
         motion_secs = min(seconds, MOTION_MAX_SECONDS)
         im = Image.open(s.image)
         w, h = sbmod.frame_size(im.width, im.height, res)
@@ -130,6 +133,8 @@ def generate(storyboard_path, resolution: str | None = None, seed: int = 0,
         final = d / "final.mp4"
         if voice:
             media.normalize_clip(talk, final, W, H, seconds=seconds, audio=talk)
+        elif music:
+            media.normalize_clip(raw, final, W, H, seconds=seconds, audio=music, loop_video=True)
         else:
             media.normalize_clip(raw, final, W, H, seconds=None)
         clips.append(final)

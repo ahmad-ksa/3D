@@ -223,3 +223,43 @@ def test_worker_video_code_path_with_tiny_models(tmp_path):
                        capture_output=True, text=True, timeout=600,
                        env=dict(os.environ, PYTHONPATH=str(root)))
     assert "WORKER-OK" in r.stdout, r.stderr[-2000:]
+
+
+def test_story_text_and_boxes_make_a_storyboard(tmp_path):
+    lines = sb.parse_story_text("1. the girl waves | 5\n\nالمشهد 2: she sings (4ث)\nzoom in")
+    assert lines == [("the girl waves", 5.0), ("she sings", 4.0), ("zoom in", None)]
+    imgs = []
+    for i in range(2):
+        p = tmp_path / f"i{i}.png"
+        Image.new("RGB", (320, 180), (40 * i, 80, 120)).save(p)
+        imgs.append(p)
+    song = _wav(tmp_path / "song.wav", 9.0)
+    path = sb.from_inputs(imgs, "the girl waves | 5\nshe sings\nzoom in", song, True, tmp_path / "w")
+    s = sb.load(path)
+    assert len(s.scenes) == 3
+    assert s.scenes[2].image == imgs[1].resolve()            # last image reused
+    lens = [media.duration(x.audio) for x in s.scenes]
+    assert abs(lens[0] - 5) < 0.2 and abs(lens[1] - 2) < 0.2 and abs(lens[2] - 2) < 0.2  # song split
+    assert all(x.lipsync for x in s.scenes)
+    # music only (no lip sync) -> the scene still lasts as long as its music
+    path2 = sb.from_inputs(imgs[:1], "", song, False, tmp_path / "w2")
+    s2 = sb.load(path2)
+    assert len(s2.scenes) == 1 and not s2.scenes[0].lipsync
+
+
+def test_runner_music_scene_loops_motion(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine.config, "OUTPUT_DIR", tmp_path / "out")
+    img = tmp_path / "a.png"
+    Image.new("RGB", (320, 180), (200, 80, 20)).save(img)
+    song = _wav(tmp_path / "song.wav", 7.0)
+    path = sb.from_inputs([img], "dance", song, False, tmp_path / "w")
+    calls = []
+
+    def fake_worker(cmd, args, job, on_progress):
+        calls.append(cmd)
+        _clip(Path(args["out"]), (args["frames"] - 1) / 24, args["width"], args["height"])
+        return {"ok": True}
+
+    r = runner.generate(path, "480p", worker=fake_worker)
+    assert calls == ["i2v"]                       # no lip sync for music
+    assert abs(r["seconds"] - 7.0) < 0.4          # 5 s motion looped under 7 s of music
