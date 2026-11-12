@@ -220,7 +220,7 @@ def slit_jaw_weights(mesh, m, lower_edge):
 
 
 def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch=0.0, drop=0.0,
-                 bone="Head", teeth=0, free_edge="lo", tip=0.025):
+                 bone="Head", teeth=0, free_edge="lo", tip=0.025, center_longer=0.0):
     """A thin surface that follows the face from behind, attached to a bone.
 
     teeth > 0 splits it into that many separate teeth with small real gaps between them
@@ -244,11 +244,13 @@ def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch
     nx = len(cols)
     verts, faces, front = [], [], []
     for j in range(nz):
-        for x, _k, tp in cols:
+        for x, k, tp in cols:
             # arch: the lower edge rises towards the sides (curved row like real teeth)
             u = min(abs(x - mx) / (0.5 * w), 1.0)
             lo = z_from * (1 - arch * u * u)
             hi = z_to - drop * u * u          # top edge falls towards the sides (lower row)
+            if teeth > 0 and center_longer and k in (teeth // 2 - 1, teeth // 2):
+                lo -= center_longer           # the two front teeth a little longer
             if teeth > 0:                     # rounded tooth tips
                 # nearly rectangular tip: flat, only the corners are rounded (superellipse)
                 r = tip * (1 - max(0.0, 1 - abs(tp) ** 4) ** 0.25)
@@ -308,7 +310,7 @@ def add_teeth(rig, m, face=None):
     if face is not None:
         tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
     teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.065, 0.08, 0.035, 0.35,
-                         arch=0.75, teeth=10, free_edge="lo")
+                         arch=0.75, teeth=10, free_edge="lo", center_longer=0.012)
     # lower row: thinner, moves with the jaw, shows just above the lower lip
     lower = _mouth_shell(rig, m, tree, "TeethLower", (0.95, 0.95, 0.93, 1), -0.08, 0.035, 0.05, 0.35,
                          drop=0.07, bone="Jaw", teeth=12, free_edge="hi")
