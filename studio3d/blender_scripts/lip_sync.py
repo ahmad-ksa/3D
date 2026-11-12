@@ -220,7 +220,7 @@ def slit_jaw_weights(mesh, m, lower_edge):
 
 
 def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch=0.0, drop=0.0,
-                 bone="Head", teeth=0, free_edge="lo", tip=0.04):
+                 bone="Head", teeth=0, free_edge="lo", tip=0.025):
     """A thin surface that follows the face from behind, attached to a bone.
 
     teeth > 0 splits it into that many separate teeth with small real gaps between them
@@ -250,8 +250,8 @@ def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch
             lo = z_from * (1 - arch * u * u)
             hi = z_to - drop * u * u          # top edge falls towards the sides (lower row)
             if teeth > 0:                     # rounded tooth tips
-                # oval tip: flat in the middle, rounded off only near the sides
-                r = tip * (1 - math.sqrt(max(0.0, 1 - tp * tp)))
+                # nearly rectangular tip: flat, only the corners are rounded (superellipse)
+                r = tip * (1 - max(0.0, 1 - abs(tp) ** 4) ** 0.25)
                 if free_edge == "lo":
                     lo += r
                 else:
