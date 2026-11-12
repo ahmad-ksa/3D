@@ -65,6 +65,7 @@ def test_hf_patch_skips_duplicates(monkeypatch):
     hh.snapshot_download(repo_id="r", allow_patterns=["a/*"])
     assert "*.ckpt" in seen["ignore_patterns"]
     assert any("paint" in p and "unet" in p for p in seen["ignore_patterns"])
+    assert "hunyuan3d-dit-*/model.safetensors" in seen["ignore_patterns"]
 
 
 def test_hf_patch_retries_network_errors(monkeypatch):
@@ -118,7 +119,12 @@ def test_duplicate_cleanup(tmp_path, monkeypatch):
     unet.mkdir(parents=True)
     (unet / "diffusion_pytorch_model.bin").write_bytes(b"b")
     (unet / "diffusion_pytorch_model.safetensors").write_bytes(b"s" * 100)
+    dit = tmp_path / "hub" / "models--tencent--X" / "snapshots" / "abc" / "hunyuan3d-dit-v2-0"
+    dit.mkdir(parents=True)
+    (dit / "model.safetensors").write_bytes(b"f" * 64)
+    (dit / "model.fp16.safetensors").write_bytes(b"h" * 32)
     config.remove_ckpt_duplicates()
+    assert not (dit / "model.safetensors").exists() and (dit / "model.fp16.safetensors").exists()
     assert not (snap / "model.fp16.ckpt").exists()
     assert (snap / "only.ckpt").exists() and (snap / "model.fp16.safetensors").exists()
     assert (unet / "diffusion_pytorch_model.bin").exists()

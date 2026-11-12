@@ -81,7 +81,9 @@ EXPORT_FORMATS = ["glb", "obj", "stl", "ply", "3mf"]
 # Files the program never loads, so we never download them:
 #  * every Hunyuan3D checkpoint exists twice: .ckpt and .safetensors (~5 GB each) -> we load .safetensors
 #  * the paint UNet exists as .bin (loaded by hy3dgen) and .safetensors (unused, ~3.7 GB)
-SKIP_PATTERNS = ["*.ckpt", "hunyuan3d-paint-v2-0*/unet/*.safetensors"]
+#  * full-quality DiT folders ship model.safetensors next to model.fp16.safetensors -> we load fp16
+SKIP_PATTERNS = ["*.ckpt", "hunyuan3d-paint-v2-0*/unet/*.safetensors", "hunyuan3d-dit-*/model.safetensors",
+                 "hunyuan3d-vae-*/model.safetensors"]
 
 DOWNLOAD_RETRY_MINUTES = float(os.environ.get("STUDIO3D_RETRY_MINUTES", "2"))
 _RETRY_DELAYS = [5, 10, 15, 20]  # seconds, then every 20 s until the 2-minute budget is used
@@ -160,6 +162,8 @@ def remove_ckpt_duplicates() -> float:
             if ck.with_suffix(".safetensors").exists()]
     dups += [st for st in hub.glob("models--*/snapshots/*/hunyuan3d-paint-v2-0*/unet/*.safetensors")
              if st.with_suffix(".bin").exists()]
+    dups += [st for st in hub.glob("models--*/snapshots/*/hunyuan3d-*/model.safetensors")
+             if (st.parent / "model.fp16.safetensors").exists()]
     for ck in dups:
         target = ck.resolve()
         try:
