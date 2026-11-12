@@ -368,7 +368,9 @@ async def rig_model(model: str, ctx: Context = None) -> list:
 
 @mcp.tool()
 async def lip_sync_model(model: str, audio: str, strength_degrees: float = 10, ctx: Context = None) -> list:
-    """Make a rigged character talk: adds a jaw bone and animates the mouth from an audio file
+    """Make a rigged character talk: finds the mouth on the texture, opens a slit there (white
+    shows behind it like teeth), and animates jaw + mouth corners from the voice in an audio file
+    (open for "aa", wide for "ee", round for "oo"; any language, offline)
     (wav/mp3/ogg/flac; path, inbox file name or URL). The model must have a Studio3D skeleton
     (rig_model first). Outputs GLB + FBX with the animation and a .blend with the sound."""
     path = str(_resolve_file(model, {".glb", ".fbx"}))

@@ -233,7 +233,7 @@ def add_teeth(rig, m, face=None):
         tree = BVHTree.FromObject(face, dg)
     nx, nz = 20, 12
     xs = [mx - 0.5 * w + 1.0 * w * i / (nx - 1) for i in range(nx)]
-    zs = [mz - 0.45 * w + 0.55 * w * j / (nz - 1) for j in range(nz)]
+    zs = [mz - 0.45 * w + 0.5 * w * j / (nz - 1) for j in range(nz)]
     verts, faces, front = [], [], []
     for j, z in enumerate(zs):
         for i, x in enumerate(xs):
@@ -244,7 +244,9 @@ def add_teeth(rig, m, face=None):
                     y = hit[0].y
                     # only where the skin faces the camera (not under the chin)
                     ok = hit[1].y < -0.45 and abs(hit[0].y - my) < 0.6 * w
-            verts.append((x, y + 0.035 * w, z))
+            # deeper towards the corners so skin sliding sideways never uncovers it
+            ax = min(abs(x - mx) / (0.5 * w), 1.0)
+            verts.append((x, y + (0.035 + 0.12 * ax * ax) * w, z))
             front.append(ok)
     for j in range(nz - 1):
         for i in range(nx - 1):
@@ -271,6 +273,107 @@ def add_teeth(rig, m, face=None):
     bpy.context.view_layer.update()
     t.matrix_world = keep
     return t
+
+
+def add_corners(rig, mesh, m):
+    """Two bones on the mouth corners: out = wide ("ي"), in + forward = round ("و")."""
+    mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = rig.data.edit_bones
+    inv = rig.matrix_world.inverted()
+    for name, sx in (("MouthL", 1), ("MouthR", -1)):
+        if name in eb:
+            continue
+        p = Vector((mx + sx * 0.5 * w, my + 0.08 * w, mz))
+        b = eb.new(name)
+        b.head, b.tail = inv @ p, inv @ (p + Vector((0, 0, 0.25 * w)))
+        b.roll = 0
+        b.parent = eb["Head"]
+        b.use_connect = False
+    bpy.ops.object.mode_set(mode="OBJECT")
+    # weights: soft round area around each corner, taken from the other bones
+    mw = mesh.matrix_world
+    groups = {g.index: g for g in mesh.vertex_groups}
+    n = 0
+    for name, sx in (("MouthL", 1), ("MouthR", -1)):
+        g = mesh.vertex_groups.get(name) or mesh.vertex_groups.new(name=name)
+        cx = mx + sx * 0.5 * w
+        for v in mesh.data.vertices:
+            p = mw @ v.co
+            if p.y > my + 0.5 * w:
+                continue
+            d = ((p.x - cx) ** 2 + ((p.z - mz) * 1.3) ** 2) ** 0.5
+            c = 1 - smoothstep(0.08 * w, 0.42 * w, d)
+            if c <= 0.01:
+                continue
+            for vg in list(v.groups):
+                gg = groups.get(vg.group)
+                if gg is not None and gg.name != name and vg.weight > 0:
+                    gg.add([v.index], vg.weight * (1 - c), "REPLACE")
+            g.add([v.index], c, "REPLACE")
+            n += 1
+    return n
+
+
+def read_audio(path):
+    """(mono samples, rate)."""
+    import numpy as np
+    try:
+        import aud
+        snd = aud.Sound(path)
+        rate = int(snd.specs[0])
+        samples = np.asarray(snd.data(), dtype=np.float32)
+    except Exception:  # noqa: BLE001
+        import wave
+        with wave.open(path, "rb") as wf:
+            rate = wf.getframerate()
+            ch = wf.getnchannels()
+            width = wf.getsampwidth()
+            raw = wf.readframes(wf.getnframes())
+        dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[width]
+        samples = np.frombuffer(raw, dtype=dtype).astype(np.float32).reshape(-1, ch)
+        if width == 1:
+            samples -= 128
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    return samples, rate
+
+
+def animate_shapes(rig, shapes, fps, max_deg, w):
+    """Jaw + corners keyed from the voice analysis."""
+    scene = bpy.context.scene
+    scene.render.fps = fps
+    n = len(shapes["open"])
+    scene.frame_start = 1
+    scene.frame_end = n + 1
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="POSE")
+    jaw = rig.pose.bones["Jaw"]
+    jaw.rotation_mode = "XYZ"
+    rot = (rig.matrix_world.to_3x3()).inverted()
+    corners = []
+    for name, sx in (("MouthL", 1), ("MouthR", -1)):
+        pb = rig.pose.bones.get(name)
+        if pb is not None:
+            to_bone = pb.bone.matrix_local.to_3x3().inverted() @ rot
+            corners.append((pb, sx, to_bone))
+    for i in range(n + 1):
+        o = shapes["open"][i] if i < n else 0.0
+        wd = shapes["wide"][i] if i < n else 0.0
+        rd = shapes["round"][i] if i < n else 0.0
+        jaw.rotation_euler = (math.radians(max_deg) * o, 0, 0)
+        jaw.keyframe_insert("rotation_euler", frame=i + 1)
+        for pb, sx, to_bone in corners:
+            # world move: sideways (out for wide, in for round) + forward for round
+            dx = sx * (0.12 * wd - 0.12 * rd) * w
+            dy = -0.05 * rd * w
+            dz = -0.02 * o * w
+            pb.location = to_bone @ Vector((dx, dy, dz))
+            pb.keyframe_insert("location", frame=i + 1)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    if rig.animation_data and rig.animation_data.action:
+        rig.animation_data.action.name = "Talk"
 
 
 def read_loudness(path, fps):
@@ -342,12 +445,26 @@ def main(args):
         lower = make_slit(mesh, mouth)
         n = slit_jaw_weights(mesh, mouth, lower)
         teeth = add_teeth(rig, mouth, mesh)
+        add_corners(rig, mesh, mouth)
     else:
         add_jaw(rig, f)
         n = jaw_weights(mesh, f)
     fps = int(args.get("fps", 30))
-    levels, seconds = read_loudness(args["audio"], fps)
-    animate(rig, levels, fps, float(args.get("max_open_degrees", 6)))
+    max_deg = float(args.get("max_open_degrees", 6))
+    shapes = None
+    if mouth:
+        try:
+            import visemes
+            samples, rate = read_audio(args["audio"])
+            shapes = visemes.analyse(samples, rate, fps)
+        except Exception as e:  # noqa: BLE001
+            print("visemes failed, loudness only:", e)
+    if shapes is not None:
+        animate_shapes(rig, shapes, fps, max_deg, mouth["width"])
+        levels, seconds = shapes["open"], shapes["seconds"]
+    else:
+        levels, seconds = read_loudness(args["audio"], fps)
+        animate(rig, levels, fps, max_deg)
 
     # sound in the timeline for preview/render inside Blender
     scene = bpy.context.scene
@@ -377,7 +494,7 @@ def main(args):
     bpy.ops.wm.save_as_mainfile(filepath=blend, copy=True)
     files.append(blend)
     return {"files": files, "jaw_vertices": n, "frames": len(levels), "seconds": round(seconds, 2),
-            "fps": fps, "slit": bool(mouth)}
+            "fps": fps, "slit": bool(mouth), "visemes": shapes is not None}
 
 
 if __name__ == "__main__":
