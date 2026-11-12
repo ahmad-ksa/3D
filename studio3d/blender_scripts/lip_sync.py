@@ -220,18 +220,41 @@ def slit_jaw_weights(mesh, m, lower_edge):
 
 
 def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch=0.0, drop=0.0,
-                 bone="Head"):
-    """A thin surface that follows the face from behind, attached to the head."""
+                 bone="Head", teeth=0, free_edge="lo"):
+    """A thin surface that follows the face from behind, attached to a bone.
+
+    teeth > 0 splits it into that many separate teeth with small real gaps between them
+    (the dark mouth shows through the gaps) and rounded tips on the free edge.
+    """
     mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
-    nx, nz = 20, 12
-    xs = [mx - 0.5 * w + 1.0 * w * i / (nx - 1) for i in range(nx)]
+    nz = 12
+    cols = []  # (x, tooth id, position inside the tooth -1..1)
+    if teeth > 0:
+        tw = 1.0 * w / teeth
+        gap = 0.10 * tw
+        per = 7
+        for k in range(teeth):
+            left = mx - 0.5 * w + k * tw + gap / 2
+            for i in range(per):
+                t = i / (per - 1)
+                cols.append((left + (tw - gap) * t, k, 2 * t - 1))
+    else:
+        nx = 20
+        cols = [(mx - 0.5 * w + 1.0 * w * i / (nx - 1), 0, 0.0) for i in range(nx)]
+    nx = len(cols)
     verts, faces, front = [], [], []
     for j in range(nz):
-        for x in xs:
+        for x, _k, tp in cols:
             # arch: the lower edge rises towards the sides (curved row like real teeth)
             u = min(abs(x - mx) / (0.5 * w), 1.0)
             lo = z_from * (1 - arch * u * u)
             hi = z_to - drop * u * u          # top edge falls towards the sides (lower row)
+            if teeth > 0:                     # rounded tooth tips
+                r = 0.10 * (hi - lo) * abs(tp) ** 4
+                if free_edge == "lo":
+                    lo += r
+                else:
+                    hi -= r
             z = mz + lo * w + (hi - lo) * w * j / (nz - 1)
             y, ok = my, tree is None
             if tree is not None:
@@ -246,6 +269,8 @@ def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch
             front.append(ok)
     for j in range(nz - 1):
         for i in range(nx - 1):
+            if cols[i][1] != cols[i + 1][1]:
+                continue  # gap between two teeth
             a0 = j * nx + i
             quad = (a0, a0 + 1, a0 + nx + 1, a0 + nx)
             if all(front[k] for k in quad):
@@ -282,10 +307,10 @@ def add_teeth(rig, m, face=None):
     if face is not None:
         tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
     teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.09, 0.08, 0.035, 0.35,
-                         arch=0.75)
+                         arch=0.75, teeth=10, free_edge="lo")
     # lower row: thinner, moves with the jaw, shows just above the lower lip
     lower = _mouth_shell(rig, m, tree, "TeethLower", (0.95, 0.95, 0.93, 1), -0.08, 0.035, 0.05, 0.35,
-                         drop=0.07, bone="Jaw")
+                         drop=0.07, bone="Jaw", teeth=12, free_edge="hi")
     inside = _mouth_shell(rig, m, tree, "MouthInside", (0.035, 0.012, 0.012, 1), -0.5, 0.08, 0.075, 0.9)
     return [teeth, lower, inside]
 
