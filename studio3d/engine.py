@@ -254,6 +254,12 @@ def _load_shape(kind: str, variant: str):
     )
     # FlashVDM: much faster & lighter mesh decoding.
     pipe.enable_flashvdm(mc_algo="mc")
+    if kind == "multiview":
+        # one shared scale for all views (T-pose characters keep their proportions)
+        from .mv_preprocess import ConsistentMVImageProcessor
+        old = pipe.image_processor
+        pipe.image_processor = ConsistentMVImageProcessor(getattr(old, "size", 512),
+                                                          getattr(old, "border_ratio", None))
     return pipe
 
 
