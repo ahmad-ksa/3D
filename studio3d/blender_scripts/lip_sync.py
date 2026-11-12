@@ -219,7 +219,8 @@ def slit_jaw_weights(mesh, m, lower_edge):
     return n
 
 
-def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch=0.0):
+def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch=0.0, drop=0.0,
+                 bone="Head"):
     """A thin surface that follows the face from behind, attached to the head."""
     mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
     nx, nz = 20, 12
@@ -230,7 +231,8 @@ def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch
             # arch: the lower edge rises towards the sides (curved row like real teeth)
             u = min(abs(x - mx) / (0.5 * w), 1.0)
             lo = z_from * (1 - arch * u * u)
-            z = mz + lo * w + (z_to - lo) * w * j / (nz - 1)
+            hi = z_to - drop * u * u          # top edge falls towards the sides (lower row)
+            z = mz + lo * w + (hi - lo) * w * j / (nz - 1)
             y, ok = my, tree is None
             if tree is not None:
                 hit = tree.ray_cast(Vector((x, my - 10.0, z)), Vector((0, 1, 0)))
@@ -263,7 +265,7 @@ def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch
     keep = t.matrix_world.copy()
     t.parent = rig
     t.parent_type = "BONE"
-    t.parent_bone = "Head"
+    t.parent_bone = bone
     bpy.context.view_layer.update()
     t.matrix_world = keep
     return t
@@ -281,8 +283,11 @@ def add_teeth(rig, m, face=None):
         tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
     teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.09, 0.08, 0.035, 0.35,
                          arch=0.75)
+    # lower row: thinner, moves with the jaw, shows just above the lower lip
+    lower = _mouth_shell(rig, m, tree, "TeethLower", (0.95, 0.95, 0.93, 1), -0.08, 0.035, 0.05, 0.35,
+                         drop=0.07, bone="Jaw")
     inside = _mouth_shell(rig, m, tree, "MouthInside", (0.035, 0.012, 0.012, 1), -0.5, 0.08, 0.075, 0.9)
-    return [teeth, inside]
+    return [teeth, lower, inside]
 
 
 def add_corners(rig, mesh, m):
