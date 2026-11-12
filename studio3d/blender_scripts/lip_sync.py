@@ -219,15 +219,18 @@ def slit_jaw_weights(mesh, m, lower_edge):
     return n
 
 
-def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness):
+def _mouth_shell(rig, m, tree, name, color, z_from, z_to, depth, roughness, arch=0.0):
     """A thin surface that follows the face from behind, attached to the head."""
     mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
     nx, nz = 20, 12
     xs = [mx - 0.5 * w + 1.0 * w * i / (nx - 1) for i in range(nx)]
-    zs = [mz + z_from * w + (z_to - z_from) * w * j / (nz - 1) for j in range(nz)]
     verts, faces, front = [], [], []
-    for z in zs:
+    for j in range(nz):
         for x in xs:
+            # arch: the lower edge rises towards the sides (curved row like real teeth)
+            u = min(abs(x - mx) / (0.5 * w), 1.0)
+            lo = z_from * (1 - arch * u * u)
+            z = mz + lo * w + (z_to - lo) * w * j / (nz - 1)
             y, ok = my, tree is None
             if tree is not None:
                 hit = tree.ray_cast(Vector((x, my - 10.0, z)), Vector((0, 1, 0)))
@@ -276,7 +279,8 @@ def add_teeth(rig, m, face=None):
     tree = None
     if face is not None:
         tree = BVHTree.FromObject(face, bpy.context.evaluated_depsgraph_get())
-    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.16, 0.08, 0.035, 0.35)
+    teeth = _mouth_shell(rig, m, tree, "Teeth", (0.97, 0.97, 0.95, 1), -0.17, 0.08, 0.035, 0.35,
+                         arch=0.75)
     inside = _mouth_shell(rig, m, tree, "MouthInside", (0.035, 0.012, 0.012, 1), -0.5, 0.08, 0.075, 0.9)
     return [teeth, inside]
 
