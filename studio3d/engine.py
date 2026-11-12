@@ -186,7 +186,27 @@ def text_ready() -> bool:
 
 
 def pose_ready() -> bool:
-    return bool(_local_snapshot(config.POSE_CONTROLNET_MODEL, ["*.safetensors"]))
+    snap = _local_snapshot(config.POSE_CONTROLNET_MODEL, ["config.json", "*.safetensors"])
+    return bool(snap) and (snap / "config.json").exists() and \
+        (snap / "diffusion_pytorch_model.safetensors").exists()
+
+
+def _ensure_downloaded(repo: str, ready, label: str, size: str, patterns=None):
+    """Download a model BEFORE loading it (with the 2-minute retry), telling the user why it waits."""
+    if ready():
+        return
+    msg = f"⬇️ تنزيل {label} لأول مرة (~{size}) — مرة وحدة بس…"
+    log.info(msg)
+    fn = getattr(_STEP_CB, "fn", None)
+    if fn is not None:
+        try:
+            fn(msg, 0, 0)
+        except Exception:  # noqa: BLE001
+            pass
+    from huggingface_hub import snapshot_download
+    snapshot_download(repo_id=repo, allow_patterns=patterns)
+    if not ready():
+        raise RuntimeError(f"لم يكتمل تنزيل {label}. تأكد من الإنترنت وأعد المحاولة (يكمل من حيث توقف).")
 
 
 def models_status() -> dict:
@@ -199,6 +219,75 @@ def models_status() -> dict:
     return out
 
 
+def vram_text() -> str:
+    """Free / total GPU memory, for the log (overflowing 8 GB makes everything 5-20x slower)."""
+    try:
+        torch = _torch()
+        if not torch.cuda.is_available():
+            return "cpu"
+        free, total = torch.cuda.mem_get_info()
+        used_here = torch.cuda.memory_reserved() / 1024 ** 3
+        return f"VRAM free {free / 1024 ** 3:.1f}/{total / 1024 ** 3:.1f} GB (this process {used_here:.1f} GB)"
+    except Exception:  # noqa: BLE001
+        return "?"
+
+
+# ---------------------------------------------------------------------------
+# Sharing the GPU between the desktop app and Claude (two separate processes)
+# ---------------------------------------------------------------------------
+# Each process keeps its last model in VRAM to reuse it. When the OTHER process starts a job it
+# writes a release request; the idle owner unloads within a second, so two sets of models never
+# sit in 8 GB together (that overflow into shared memory was the main cause of slow generations).
+_OWNER = config.DATA_ROOT / "gpu_owner.json"
+_REQUEST = config.DATA_ROOT / "gpu_release.request"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        import psutil
+        return psutil.pid_exists(int(pid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _read_pid(path: Path):
+    try:
+        return int(json.loads(path.read_text(encoding="utf-8"))["pid"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_pid(path: Path):
+    import os
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def claim_gpu(timeout: float = 30.0):
+    """Call while holding the GPU file lock, before loading models: asks another Studio3D process
+    that still holds models in VRAM to free them, and waits (max `timeout` s) until it did."""
+    import os
+    owner = _read_pid(_OWNER)
+    if owner is None or owner == os.getpid() or not _pid_alive(owner):
+        return
+    log.info("asking process %s to free the GPU", owner)
+    _write_pid(_REQUEST)
+    t = time.time()
+    while time.time() - t < timeout:
+        cur = _read_pid(_OWNER)
+        if cur is None or cur != owner or not _pid_alive(owner):
+            log.info("GPU freed by %s after %.1fs", owner, time.time() - t)
+            break
+        time.sleep(0.3)
+    try:
+        _REQUEST.unlink()
+    except OSError:
+        pass
+
+
 class ModelManager:
     """Keeps at most ONE heavy model on the GPU. Switching unloads the previous one."""
 
@@ -207,8 +296,10 @@ class ModelManager:
         self._obj = None
         self._rembg = None
         self.lock = threading.Lock()
+        self._watcher = None
 
     def _free(self):
+        import os
         if self._obj is not None:
             log.info("unloading %s", self._key)
         self._obj = None
@@ -217,6 +308,34 @@ class ModelManager:
         torch = _torch()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        if _read_pid(_OWNER) == os.getpid():
+            try:
+                _OWNER.unlink()
+            except OSError:
+                pass
+
+    def _watch(self):
+        """Background: free our models when the other process asks and we are idle."""
+        import os
+        while True:
+            time.sleep(1.0)
+            try:
+                req = _read_pid(_REQUEST)
+                if req is None or req == os.getpid() or self._obj is None:
+                    continue
+                if self.lock.acquire(blocking=False):
+                    try:
+                        log.info("process %s needs the GPU — freeing ours", req)
+                        self._free()
+                    finally:
+                        self.lock.release()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _start_watcher(self):
+        if self._watcher is None:
+            self._watcher = threading.Thread(target=self._watch, name="gpu-release", daemon=True)
+            self._watcher.start()
 
     def unload(self):
         self._free()
@@ -225,11 +344,13 @@ class ModelManager:
         if self._key == key and self._obj is not None:
             return self._obj
         self._free()
-        log.info("loading %s", key)
+        log.info("loading %s (%s)", key, vram_text())
         t = time.time()
         self._obj = loader()
         self._key = key
-        log.info("loaded %s in %.1fs", key, time.time() - t)
+        _write_pid(_OWNER)
+        self._start_watcher()
+        log.info("loaded %s in %.1fs (%s)", key, time.time() - t, vram_text())
         return self._obj
 
     # -- background removal (small, runs on CPU via onnxruntime) --------------
@@ -246,16 +367,75 @@ MANAGER = ModelManager()
 # ---------------------------------------------------------------------------
 # Loaders
 # ---------------------------------------------------------------------------
+_INIT_FNS = ("uniform_", "normal_", "trunc_normal_", "kaiming_uniform_", "kaiming_normal_",
+             "xavier_uniform_", "xavier_normal_", "constant_", "zeros_", "ones_", "orthogonal_")
+
+
+@__import__("contextlib").contextmanager
+def no_random_init():
+    """Build modules WITHOUT random initial weights. Only for parts whose every weight is then
+    loaded from the checkpoint (strict load): random init of DINOv2-giant + DiT is ~15-25 s of CPU
+    work that is thrown away right after."""
+    import torch.nn.init as init
+    saved = {n: getattr(init, n) for n in _INIT_FNS if hasattr(init, n)}
+    for n in saved:
+        setattr(init, n, lambda t, *a, **k: t)
+    try:
+        from transformers.modeling_utils import no_init_weights
+        ctx = no_init_weights()
+    except Exception:  # noqa: BLE001
+        ctx = __import__("contextlib").nullcontext()
+    try:
+        with ctx:
+            yield
+    finally:
+        for n, f in saved.items():
+            setattr(init, n, f)
+
+
+def _checkpoint_parts(kind: str, variant: str) -> set:
+    """Top-level parts stored in the shape checkpoint (model / vae / conditioner)."""
+    from hy3dgen.shapegen.utils import smart_load_model
+    spec = config.SHAPE_MODELS[kind]
+    try:
+        _cfg, ckpt = smart_load_model(spec["repo"], spec[variant], use_safetensors=True, variant="fp16")
+        from safetensors import safe_open
+        with safe_open(ckpt, framework="pt") as f:
+            return {k.split(".", 1)[0] for k in f.keys()}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
 def _load_shape(kind: str, variant: str):
     torch = _torch()
+    import hy3dgen.shapegen.pipelines as hp
     from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
 
     _patch_progress_bars()
     spec = config.SHAPE_MODELS[kind]
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-        spec["repo"], subfolder=spec[variant], use_safetensors=True, device=device,
-    )
+    with config.local_only(shape_ready(kind, variant)):
+        parts = _checkpoint_parts(kind, variant)
+        orig = hp.instantiate_from_config
+
+        def fast_instantiate(cfg, **kw):
+            target = str(cfg.get("target", "")).lower() if isinstance(cfg, dict) else ""
+            name = target.rsplit(".", 1)[-1]
+            is_dit = name.endswith("dit") or ".denoisers." in target
+            is_cond = name.endswith("imageencoder") and "vae" not in target
+            strict_part = ("model" in parts and is_dit) or ("conditioner" in parts and is_cond)
+            if strict_part:
+                with no_random_init():
+                    return orig(cfg, **kw)
+            return orig(cfg, **kw)
+
+        hp.instantiate_from_config = fast_instantiate
+        try:
+            pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                spec["repo"], subfolder=spec[variant], use_safetensors=True, device=device,
+            )
+        finally:
+            hp.instantiate_from_config = orig
     # FlashVDM: much faster & lighter mesh decoding.
     pipe.enable_flashvdm(mc_algo="mc")
     if kind == "multiview":
@@ -272,8 +452,24 @@ def _load_texture():
     from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
     _patch_progress_bars()
-    pipe = Hunyuan3DPaintPipeline.from_pretrained(config.TEXTURE_MODEL["repo"],
-                                                  subfolder=config.TEXTURE_MODEL["subfolder"])
+    orig_load = torch.load
+
+    def mmap_load(f, *a, **k):
+        # read the big .bin straight from disk pages instead of copying it all into RAM first
+        if isinstance(f, (str, Path)) and str(f).endswith(".bin") and "mmap" not in k:
+            try:
+                return orig_load(f, *a, mmap=True, **k)
+            except Exception:  # noqa: BLE001  (old file format: fall back to a normal read)
+                pass
+        return orig_load(f, *a, **k)
+
+    torch.load = mmap_load
+    try:
+        with config.local_only(texture_ready()):
+            pipe = Hunyuan3DPaintPipeline.from_pretrained(config.TEXTURE_MODEL["repo"],
+                                                          subfolder=config.TEXTURE_MODEL["subfolder"])
+    finally:
+        torch.load = orig_load
     if torch.cuda.is_available():
         pipe.enable_model_cpu_offload()  # needed on 8 GB cards
     return pipe
@@ -284,8 +480,9 @@ def _load_t2i():
     from diffusers import AutoPipelineForText2Image
     _patch_progress_bars()
 
+    _ensure_downloaded(config.TEXT2IMAGE_MODEL, text_ready, "نموذج النص ← صورة", "10 GB")
     pipe = AutoPipelineForText2Image.from_pretrained(
-        config.TEXT2IMAGE_MODEL, torch_dtype=torch.float16,
+        config.TEXT2IMAGE_MODEL, torch_dtype=torch.float16, local_files_only=True,
         enable_pag=True, pag_applied_layers=["blocks.(16|17|18|19)"],
     )
     if torch.cuda.is_available():
@@ -297,9 +494,13 @@ def _load_t2i_pose():
     torch = _torch()
     from diffusers import HunyuanDiT2DControlNetModel, HunyuanDiTControlNetPipeline
     _patch_progress_bars()
-    cn = HunyuanDiT2DControlNetModel.from_pretrained(config.POSE_CONTROLNET_MODEL, torch_dtype=torch.float16)
+    _ensure_downloaded(config.TEXT2IMAGE_MODEL, text_ready, "نموذج النص ← صورة", "10 GB")
+    _ensure_downloaded(config.POSE_CONTROLNET_MODEL, pose_ready, "نموذج الوضعيات", "3 GB",
+                       ["config.json", "*.safetensors"])
+    cn = HunyuanDiT2DControlNetModel.from_pretrained(config.POSE_CONTROLNET_MODEL, torch_dtype=torch.float16,
+                                                     local_files_only=True)
     pipe = HunyuanDiTControlNetPipeline.from_pretrained(
-        config.TEXT2IMAGE_MODEL, controlnet=cn, torch_dtype=torch.float16)
+        config.TEXT2IMAGE_MODEL, controlnet=cn, torch_dtype=torch.float16, local_files_only=True)
     if torch.cuda.is_available():
         pipe.enable_model_cpu_offload()
     return pipe
@@ -374,7 +575,9 @@ def text_to_image(prompt: str, seed: int, pose: str = "free") -> Image.Image:
     if pose in ("t", "a"):
         from . import poses
         pipe = MANAGER.get(("t2i_pose",), _load_t2i_pose)
-        img = pipe(prompt=prompt[:180] + poses.PROMPT_HINT[pose] + pos, negative_prompt=neg + ",手臂下垂",
+        # pose words first: the CLIP text encoder only reads the first 77 tokens
+        img = pipe(prompt=poses.PROMPT_HINT[pose].lstrip("，") + "，" + prompt[:180] + pos,
+                   negative_prompt=neg + ",手臂下垂",
                    control_image=poses.skeleton_image(pose, 1024), controlnet_conditioning_scale=1.0,
                    num_inference_steps=25, width=1024, height=1024, generator=gen,
                    return_dict=False)[0][0]

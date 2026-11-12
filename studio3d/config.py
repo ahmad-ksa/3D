@@ -1,6 +1,8 @@
 """Paths, model ids and quality presets."""
+import contextlib as _contextlib
 import os
 import sys
+import threading as _threading
 from pathlib import Path
 
 APP_NAME = "Studio3D"
@@ -109,6 +111,28 @@ def is_network_error(e: BaseException) -> bool:
     return False
 
 
+_LOCAL = _threading.local()
+
+
+@_contextlib.contextmanager
+def local_only(enabled: bool = True):
+    """Inside this block every Hugging Face lookup of THIS thread uses the files already on disk,
+    with no internet request at all (used when a model is known to be fully downloaded).
+    Without it, every model load asks huggingface.co about the latest version first, which costs
+    seconds normally and up to a minute on a stalled connection — and can re-download a whole
+    model when Tencent publishes a small change."""
+    old = getattr(_LOCAL, "on", False)
+    _LOCAL.on = bool(enabled) or old
+    try:
+        yield
+    finally:
+        _LOCAL.on = old
+
+
+def is_local_only() -> bool:
+    return getattr(_LOCAL, "on", False)
+
+
 def patch_hf_downloads():
     """Make every model download (ours and Hunyuan3D's internal ones):
     1. skip files we never load (see SKIP_PATTERNS);
@@ -129,6 +153,8 @@ def patch_hf_downloads():
         if isinstance(ignore, str):
             ignore = [ignore]
         kwargs["ignore_patterns"] = list(ignore) + SKIP_PATTERNS
+        if is_local_only():
+            kwargs["local_files_only"] = True
         if kwargs.get("local_files_only"):
             return original(*args, **kwargs)
         deadline = time.time() + DOWNLOAD_RETRY_MINUTES * 60

@@ -48,11 +48,14 @@ def run(kind: str, inputs: dict, prompt: str | None, opt: Options,
 
     with gpu_lock(), engine.MANAGER.lock:
         engine.reset_cancel()
+        engine.claim_gpu()
         engine.set_step_callback(None)
         if kind == "text":
             progress(0.05, "توليد صورة من النص…")
             if opt.pose in ("t", "a"):
                 progress(0.05, "توليد صورة من النص بوضعية " + ("T-pose" if opt.pose == "t" else "A-pose") + "…")
+            if not engine.text_ready() or (opt.pose in ("t", "a") and not engine.pose_ready()):
+                progress(0.05, "⬇️ تنزيل نماذج النص/الوضعيات لأول مرة (عدة GB) — مرة وحدة بس…")
             inputs = {"front": engine.text_to_image(prompt, seed, opt.pose)}
 
         engine.check_cancel()
@@ -192,6 +195,7 @@ def _blender_steps(model_path, job, opt, progress, warnings, meta):
 
 def quad(model_path: str, target_faces: int = 10000, bake_size: int = 2048) -> dict:
     from . import blender
+    engine.reset_cancel()  # an old ⏹ press must not stop this new job
     job = engine.new_job_dir("quad")
     q = blender.quad_remesh(model_path, job, target_faces=target_faces, bake_size=bake_size)
     preview = next(f for f in q["files"] if f.endswith(".glb"))
@@ -203,6 +207,7 @@ def quad(model_path: str, target_faces: int = 10000, bake_size: int = 2048) -> d
 
 def rig(model_path: str) -> dict:
     from . import blender
+    engine.reset_cancel()  # an old ⏹ press must not stop this new job
     job = engine.new_job_dir("rig")
     r = blender.auto_rig(model_path, job)
     preview = next(f for f in r["files"] if f.endswith(".glb"))
@@ -217,6 +222,7 @@ def lip_sync(model_path: str, audio_path: str, strength: float = 5) -> dict:
     """Talking animation: jaw follows the loudness of an audio file (needs a rigged model)."""
     import shutil
     from . import blender
+    engine.reset_cancel()  # an old ⏹ press must not stop this new job
     model_path = str(model_path)
     if not model_path.lower().endswith((".glb", ".fbx")):
         raise ValueError("استخدم ملف GLB أو FBX فيه هيكل عظمي (من Studio3D).")
@@ -260,7 +266,9 @@ def retexture(mesh_path: str, image, remove_bg: bool = True,
               progress: Callable[[float, str], None] = lambda p, d: None) -> dict:
     job = engine.new_job_dir("retexture")
     mesh = mesh_tools.load_mesh(mesh_path)
+    engine.reset_cancel()
     with gpu_lock(), engine.MANAGER.lock:
+        engine.claim_gpu()
         progress(0.1, "تجهيز…")
         img = engine.prepare_image(image, remove_bg)
         progress(0.3, "تلوين المجسم…")
