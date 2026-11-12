@@ -180,10 +180,12 @@ def auto_rig(model_path: str, out_dir: str, name: str = "model_rigged", formats=
 
 
 def lip_sync(model_path: str, audio_path: str, out_dir: str, name: str = "model_talking",
-             max_open_degrees: float = 10, fps: int = 30) -> dict:
-    return run_script("lip_sync", {"input": str(model_path), "audio": str(audio_path), "outdir": str(out_dir),
-                                   "name": name, "max_open_degrees": float(max_open_degrees), "fps": int(fps)},
-                      log_dir=out_dir)
+             max_open_degrees: float = 6, fps: int = 30, mouth: dict | None = None) -> dict:
+    args = {"input": str(model_path), "audio": str(audio_path), "outdir": str(out_dir),
+            "name": name, "max_open_degrees": float(max_open_degrees), "fps": int(fps)}
+    if mouth:
+        args["mouth"] = mouth
+    return run_script("lip_sync", args, log_dir=out_dir)
 
 
 def open_gui(model_path: str):

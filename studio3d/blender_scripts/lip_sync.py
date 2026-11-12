@@ -76,6 +76,23 @@ def add_jaw(rig, f):
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
+def add_jaw_at_mouth(rig, f, m):
+    """Jaw hinge behind/above the mouth, bone pointing to the mouth."""
+    C.select_only(rig)
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = rig.data.edit_bones
+    if "Jaw" not in eb:
+        inv = rig.matrix_world.inverted()
+        depth = max(f["back_y"] - m["y"], m["width"])
+        hinge = Vector((m["x"], m["y"] + 0.55 * depth, m["z"] + 0.45 * m["width"]))
+        tip = Vector((m["x"], m["y"] - 0.02 * depth, m["z"] - 0.15 * m["width"]))
+        b = eb.new("Jaw")
+        b.head, b.tail = inv @ hinge, inv @ tip
+        b.parent = eb["Head"]
+        b.use_connect = False
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
 def smoothstep(e0, e1, x):
     t = max(0.0, min(1.0, (x - e0) / ((e1 - e0) or 1e-9)))
     return t * t * (3 - 2 * t)
@@ -107,6 +124,153 @@ def jaw_weights(mesh, f):
             head_g.add([v.index], (1 - w) * w_head, "REPLACE")
             count += 1
     return count
+
+
+# ---------------------------------------------------------------------------
+# Mouth slit (when the mouth line was found on the texture)
+# ---------------------------------------------------------------------------
+def make_slit(mesh, m):
+    """Cut the mesh along the mouth line so the lips can part. m: mouth in Blender coords
+    {x, y (front surface), z, width}. Returns the vertex indices of the lower lip edge."""
+    import bmesh
+    mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
+    me = mesh.data
+    mw = mesh.matrix_world
+    inv = mw.inverted()
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.verts.ensure_lookup_table()
+
+    def wco(v):
+        return mw @ v.co
+
+    def in_region(f, sx=0.75, sz=0.35):
+        c = mw @ f.calc_center_median()
+        return abs(c.x - mx) < sx * w and abs(c.z - mz) < sz * w and c.y < my + 0.35 * w
+
+    region = [f for f in bm.faces if in_region(f)]
+    if not region:
+        bm.free()
+        return []
+    # more density around the mouth so the cut follows the lips
+    edges = list({e for f in region for e in f.edges})
+    bmesh.ops.subdivide_edges(bm, edges=edges, cuts=2, use_grid_fill=True)
+    region = [f for f in bm.faces if in_region(f)]
+    geom = list({x for f in region for x in (f, *f.edges, *f.verts)})
+    co = inv @ Vector((mx, my, mz))
+    no = (inv.to_3x3() @ Vector((0, 0, 1))).normalized()
+    res = bmesh.ops.bisect_plane(bm, geom=geom, plane_co=co, plane_no=no, dist=1e-6)
+    cut = [e for e in res["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
+    cut = [e for e in cut if all(abs(wco(v).x - mx) < 0.5 * w for v in e.verts)
+           and all(wco(v).y < my + 0.3 * w for v in e.verts)]
+    if not cut:
+        bm.free()
+        return []
+    bmesh.ops.split_edges(bm, edges=cut)
+    # lower-lip copies: on the line, every linked face below it
+    lower = []
+    for v in bm.verts:
+        p = wco(v)
+        if abs(p.z - mz) < 1e-4 * max(w, 1e-3) + 1e-6 and abs(p.x - mx) < 0.5 * w and v.link_faces:
+            if all((mw @ f.calc_center_median()).z < mz for f in v.link_faces):
+                lower.append(v.index)
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    return lower
+
+
+def slit_jaw_weights(mesh, m, lower_edge):
+    """Lower lip + chin follow the jaw; the corners stay closed."""
+    mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
+    mw = mesh.matrix_world
+    head_g = mesh.vertex_groups.get("Head")
+    jaw_g = mesh.vertex_groups.get("Jaw") or mesh.vertex_groups.new(name="Jaw")
+    lower_edge = set(lower_edge)
+    n = 0
+    for v in mesh.data.vertices:
+        p = mw @ v.co
+        if p.y > my + 0.6 * w:  # back of the head
+            continue
+        ax = abs(p.x - mx)
+        if v.index in lower_edge:
+            # along the lip line: full at the centre, 0 at the corners (corners stay closed)
+            wt = 1 - smoothstep(0.2 * w, 0.48 * w, ax)
+        elif p.z < mz - 1e-6:
+            depth_below = mz - p.z
+            half = 0.48 * w + 0.7 * depth_below          # the moving area widens towards the chin
+            hx = 1 - smoothstep(0.55 * half, half, ax)
+            vz = 1 - smoothstep(0.8 * w, 1.3 * w, depth_below)  # fade out below the chin
+            wt = hx * vz
+        else:
+            continue
+        if wt <= 0.01:
+            continue
+        w_head = 0.0
+        if head_g:
+            for g in v.groups:
+                if g.group == head_g.index:
+                    w_head = g.weight
+        total = max(w_head, wt)
+        jaw_g.add([v.index], wt, "REPLACE")
+        if head_g:
+            head_g.add([v.index], max(0.0, total - wt), "REPLACE")
+        n += 1
+    return n
+
+
+def add_teeth(rig, m, face=None):
+    """A thin white shell that follows the face just behind the slit.
+
+    Closed mouth: hidden under the skin. Open mouth: white shows through the
+    slit and grows with the opening (like teeth), nothing else is drawn.
+    """
+    from mathutils.bvhtree import BVHTree
+    mx, my, mz, w = m["x"], m["y"], m["z"], m["width"]
+    tree = None
+    if face is not None:
+        dg = bpy.context.evaluated_depsgraph_get()
+        tree = BVHTree.FromObject(face, dg)
+    nx, nz = 20, 12
+    xs = [mx - 0.5 * w + 1.0 * w * i / (nx - 1) for i in range(nx)]
+    zs = [mz - 0.45 * w + 0.55 * w * j / (nz - 1) for j in range(nz)]
+    verts, faces, front = [], [], []
+    for j, z in enumerate(zs):
+        for i, x in enumerate(xs):
+            y, ok = my, tree is None
+            if tree is not None:
+                hit = tree.ray_cast(Vector((x, my - 10.0, z)), Vector((0, 1, 0)))
+                if hit[0] is not None:
+                    y = hit[0].y
+                    # only where the skin faces the camera (not under the chin)
+                    ok = hit[1].y < -0.45 and abs(hit[0].y - my) < 0.6 * w
+            verts.append((x, y + 0.035 * w, z))
+            front.append(ok)
+    for j in range(nz - 1):
+        for i in range(nx - 1):
+            a0 = j * nx + i
+            quad = (a0, a0 + 1, a0 + nx + 1, a0 + nx)
+            if all(front[k] for k in quad):
+                faces.append(quad)
+    me = bpy.data.meshes.new("Teeth")
+    me.from_pydata(verts, [], faces)
+    me.update()
+    t = bpy.data.objects.new("Teeth", me)
+    bpy.context.scene.collection.objects.link(t)
+    mat = bpy.data.materials.new("Teeth")
+    mat.use_nodes = True
+    bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+    bsdf.inputs["Base Color"].default_value = (0.97, 0.97, 0.95, 1)
+    bsdf.inputs["Roughness"].default_value = 0.35
+    t.data.materials.append(mat)
+    # rigidly attached to the head (keep its world position)
+    keep = t.matrix_world.copy()
+    t.parent = rig
+    t.parent_type = "BONE"
+    t.parent_bone = "Head"
+    bpy.context.view_layer.update()
+    t.matrix_world = keep
+    return t
 
 
 def read_loudness(path, fps):
@@ -170,11 +334,20 @@ def main(args):
     C.reset_scene()
     rig, mesh = import_rigged(args["input"])
     f = face_frame(rig, mesh)
-    add_jaw(rig, f)
-    n = jaw_weights(mesh, f)
+    mouth = args.get("mouth")
+    teeth = None
+    if mouth:  # mouth line found on the texture: real slit + white teeth behind it
+        f = dict(f, cx=mouth["x"], mouth_z=mouth["z"], front_y=mouth["y"])
+        add_jaw_at_mouth(rig, f, mouth)
+        lower = make_slit(mesh, mouth)
+        n = slit_jaw_weights(mesh, mouth, lower)
+        teeth = add_teeth(rig, mouth, mesh)
+    else:
+        add_jaw(rig, f)
+        n = jaw_weights(mesh, f)
     fps = int(args.get("fps", 30))
     levels, seconds = read_loudness(args["audio"], fps)
-    animate(rig, levels, fps, float(args.get("max_open_degrees", 10)))
+    animate(rig, levels, fps, float(args.get("max_open_degrees", 6)))
 
     # sound in the timeline for preview/render inside Blender
     scene = bpy.context.scene
@@ -191,6 +364,8 @@ def main(args):
     files = []
     C.select_only(rig, mesh)
     mesh.select_set(True)
+    if teeth is not None:
+        teeth.select_set(True)
     glb = os.path.join(out, f"{name}.glb")
     bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_animations=True)
     files.append(glb)
@@ -202,7 +377,7 @@ def main(args):
     bpy.ops.wm.save_as_mainfile(filepath=blend, copy=True)
     files.append(blend)
     return {"files": files, "jaw_vertices": n, "frames": len(levels), "seconds": round(seconds, 2),
-            "fps": fps}
+            "fps": fps, "slit": bool(mouth)}
 
 
 if __name__ == "__main__":

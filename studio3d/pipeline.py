@@ -219,12 +219,27 @@ def lip_sync(model_path: str, audio_path: str, strength: float = 10) -> dict:
     job = engine.new_job_dir("talk")
     audio = job / ("voice" + Path(audio_path).suffix.lower())
     shutil.copy2(audio_path, audio)
-    r = blender.lip_sync(model_path, audio, job, max_open_degrees=strength)
+    mouth = _find_mouth_blender(model_path)
+    r = blender.lip_sync(model_path, audio, job, max_open_degrees=strength, mouth=mouth)
     preview = next(f for f in r["files"] if f.endswith(".glb"))
-    info = {k: r.get(k) for k in ("frames", "seconds", "fps", "jaw_vertices")}
+    info = {k: r.get(k) for k in ("frames", "seconds", "fps", "jaw_vertices", "slit")}
     engine.save_meta(job, {"kind": "talk", "source": model_path, "audio": audio.name, "talk": info})
     return {"job_dir": str(job), "preview": preview, "files": r["files"] + [str(audio)], "stats": info,
             "audio": str(audio), "mesh": mesh_tools.load_mesh(preview)}
+
+
+def _find_mouth_blender(model_path: str):
+    """Mouth line from the texture (glTF coords) -> Blender coords; None if not found."""
+    if not str(model_path).lower().endswith(".glb"):
+        return None
+    try:
+        from . import face
+        m = face.find_mouth(mesh_tools.load_mesh(model_path))
+    except Exception:  # noqa: BLE001
+        return None
+    if not m or not m.get("found"):
+        return None
+    return {"x": m["x"], "y": -m["z"], "z": m["y"], "width": m["width"]}
 
 
 def _is_network(e: Exception) -> bool:

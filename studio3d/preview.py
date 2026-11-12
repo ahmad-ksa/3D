@@ -90,3 +90,50 @@ def png_bytes(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
+
+
+def render_textured(mesh: trimesh.Trimesh, azim: float = 0.0, elev: float = 0.0, size: int = 1024,
+                    device: str = "cpu"):
+    """Sharp render that samples the texture per pixel (not per vertex).
+    Returns (RGB image, info) where info maps pixels back to model coordinates:
+    model_x = (px/size*2-1)*s + cx ; model_y = ((1-py/size)*2-1)*s + cy   (front view, glTF Y-up)."""
+    v = np.asarray(mesh.vertices, dtype=np.float64)
+    center = (v.max(0) + v.min(0)) / 2
+    radius = float(np.linalg.norm(v - center, axis=1).max() or 1.0)
+    R = _rot(azim, elev)
+    vr = ((v - center) / radius) @ R.T
+    pos = np.concatenate([vr[:, :2] / 1.05, -vr[:, 2:3] / 1.1, np.ones((len(vr), 1))], axis=1)
+    faces = np.asarray(mesh.faces, dtype=np.int32)
+    fi, bc = cr.rasterize(torch.tensor(pos, dtype=torch.float32)[None],
+                          torch.tensor(faces, dtype=torch.int32), (size, size))
+    fi = fi.numpy()
+    bc = bc.numpy()
+    img = np.tile(BG, (size, size, 1))
+    hit = fi > 0
+    vis = mesh.visual
+    tex = None
+    if getattr(vis, "kind", None) == "texture" and vis.uv is not None:
+        try:
+            mat = vis.material
+            im = getattr(mat, "baseColorTexture", None) or getattr(mat, "image", None)
+            if im is not None:
+                tex = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
+        except Exception:  # noqa: BLE001
+            tex = None
+    if tex is not None:
+        uv = np.asarray(vis.uv, dtype=np.float64)
+        f = faces[fi[hit] - 1]
+        b = bc[hit]
+        uvp = (uv[f] * b[:, :, None]).sum(1)
+        th, tw = tex.shape[:2]
+        px = np.clip((uvp[:, 0] % 1.0) * (tw - 1), 0, tw - 1).astype(int)
+        py = np.clip((1 - (uvp[:, 1] % 1.0)) * (th - 1), 0, th - 1).astype(int)
+        img[hit] = tex[py, px]
+    else:
+        cols = _vertex_colors(mesh)
+        f = faces[fi[hit] - 1]
+        img[hit] = (cols[f] * bc[hit][:, :, None]).sum(1)
+    img = np.flipud(img)
+    info = {"size": size, "scale": radius * 1.05, "center": center, "rotation": R,
+            "mask": np.flipud(hit)}
+    return Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)), info
