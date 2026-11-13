@@ -323,12 +323,33 @@ def cmd_lipsync(a: dict, config) -> dict:
 COMMANDS = {"i2v": cmd_i2v, "lipsync": cmd_lipsync}
 
 
+def _watch_parent(pid):
+    """If the app is closed, stop at once: a worker left running keeps ~15 GB of RAM and the GPU
+    busy, and the next video then crashes while loading."""
+    if not pid:
+        return
+    import threading
+
+    def run():
+        try:
+            import psutil
+        except Exception:  # noqa: BLE001
+            return
+        while True:
+            time.sleep(2)
+            if not psutil.pid_exists(int(pid)):
+                os._exit(3)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def main(argv=None):
     argv = argv if argv is not None else sys.argv[1:]
     args_path = Path(argv[0])
     a = json.loads(args_path.read_text(encoding="utf-8"))
     result = Path(a["result"])
     t = time.time()
+    _watch_parent(a.get("parent_pid"))
     try:
         config = _setup_paths()
         if a.get("ffmpeg_dir"):

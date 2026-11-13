@@ -285,3 +285,20 @@ def test_story_lines_pick_image_by_character_name(tmp_path):
     assert [x.image.name for x in s.scenes] == [b.name, a.name, b.name]
     assert s.scenes[0].prompt == "she sings"
     assert abs(media.duration(s.scenes[1].audio) - 1.5) < 0.1
+
+
+def test_worker_stops_when_the_app_is_gone(tmp_path):
+    """A worker whose app was closed must exit (it would keep ~15 GB RAM + the GPU)."""
+    import sys
+    import time
+    args = tmp_path / "a.json"
+    args.write_text(json.dumps({"cmd": "sleep_test", "parent_pid": 999999, "result": str(tmp_path / "r.json")}),
+                    encoding="utf-8")
+    code = ("import sys, time; from studio3d.video import worker; "
+            "worker.COMMANDS['sleep_test'] = lambda a, c: time.sleep(30) or {}; "
+            "sys.exit(worker.main([sys.argv[1]]))")
+    root = Path(__file__).resolve().parents[1]
+    t = time.time()
+    p = subprocess.run([sys.executable, "-c", code, str(args)], cwd=root, timeout=60,
+                       env=dict(os.environ, PYTHONPATH=str(root)))
+    assert p.returncode == 3 and time.time() - t < 20

@@ -39,6 +39,7 @@ def run_worker(cmd: str, args: dict, job: Path, on_progress: Callable[[float, st
     tag = f"{cmd}_{int(time.time() * 1000)}"
     args_file = job / f"{tag}.json"
     args["result"] = str(job / f"{tag}_result.json")
+    args.setdefault("parent_pid", os.getpid())
     args.setdefault("ffmpeg_dir", str(media.ffmpeg_dir(config.MODELS_DIR / "video" / "bin")))
     args_file.write_text(json.dumps(args, ensure_ascii=False), encoding="utf-8")
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
@@ -75,8 +76,13 @@ def run_worker(cmd: str, args: dict, job: Path, on_progress: Callable[[float, st
     engine.check_cancel()
     res_path = Path(args["result"])
     if not res_path.exists():
-        tail = log_file.read_text(encoding="utf-8", errors="replace")[-800:]
-        raise RuntimeError(f"توقف عامل الفيديو بشكل غير متوقع:\n{tail}")
+        tail = log_file.read_text(encoding="utf-8", errors="replace")[-600:]
+        code = proc.returncode
+        hint = ""
+        if "Loading pipeline components" in tail or code in (3221225477, -1073741819, 3221225725, -1073741571):
+            hint = ("\nغالباً ذاكرة الجهاز (RAM) ما كفت لتحميل نموذج الفيديو. سكّر البرامج الثانية، "
+                    "وتأكد من مدير المهام ما فيه python.exe قديم شغال من توليد سابق (أو أعد تشغيل الجهاز).")
+        raise RuntimeError(f"توقف عامل الفيديو بشكل غير متوقع (رمز {code}).{hint}\n{tail}")
     res = json.loads(res_path.read_text(encoding="utf-8"))
     if not res.get("ok"):
         log.error("worker %s failed: %s", cmd, res.get("trace"))
