@@ -479,6 +479,7 @@ def video_scenes_preview(images, story, audio):
 def video_open_folder():
     config.VIDEO_OUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        from . import library
         library.open_path(config.VIDEO_OUT_DIR)
     except Exception as e:  # noqa: BLE001
         return f"تعذّر فتح المجلد: {e}"
