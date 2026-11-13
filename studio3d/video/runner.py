@@ -33,8 +33,9 @@ def _worker_python() -> str:
     return sys.executable
 
 
-def run_worker(cmd: str, args: dict, job: Path, on_progress: Callable[[float, str], None]) -> dict:
-    """Start the worker process, relay its progress, kill it if ⏹ is pressed."""
+def run_worker(cmd: str, args: dict, job: Path, on_progress: Callable[[float, str], None],
+               on_item: Callable[[dict], None] | None = None) -> dict:
+    """Start the worker process, relay its progress (and each finished scene), kill it if ⏹ is pressed."""
     args = dict(args, cmd=cmd)
     tag = f"{cmd}_{int(time.time() * 1000)}"
     args_file = job / f"{tag}.json"
@@ -64,25 +65,33 @@ def run_worker(cmd: str, args: dict, job: Path, on_progress: Callable[[float, st
         try:
             for line in proc.stdout:
                 lf.write(line)
+                lf.flush()
                 if line.startswith("@@P "):
                     parts = line.rstrip("\n").split(" ", 2)
                     try:
                         on_progress(float(parts[1]), parts[2] if len(parts) > 2 else "")
                     except ValueError:
                         pass
+                elif line.startswith("@@S ") and on_item is not None:
+                    try:
+                        on_item(json.loads(line[4:]))
+                    except Exception:  # noqa: BLE001  (a preview must never stop the video)
+                        log.exception("scene preview failed")
             proc.wait()
         finally:
             stop.set()
+            if proc.poll() is None:      # an error in the app side: never leave the worker running
+                proc.kill()
     engine.check_cancel()
     res_path = Path(args["result"])
     if not res_path.exists():
-        tail = log_file.read_text(encoding="utf-8", errors="replace")[-600:]
+        tail = log_file.read_text(encoding="utf-8", errors="replace")[-1500:]
         code = proc.returncode
         hint = ""
-        if "Loading pipeline components" in tail or code in (3221225477, -1073741819, 3221225725, -1073741571):
+        if "[mem]" in tail or code in (3221225477, -1073741819, 3221225725, -1073741571, 3221226505):
             hint = ("\nغالباً ذاكرة الجهاز (RAM) ما كفت لتحميل نموذج الفيديو. سكّر البرامج الثانية، "
                     "وتأكد من مدير المهام ما فيه python.exe قديم شغال من توليد سابق (أو أعد تشغيل الجهاز).")
-        raise RuntimeError(f"توقف عامل الفيديو بشكل غير متوقع (رمز {code}).{hint}\n{tail}")
+        raise RuntimeError(f"توقف عامل الفيديو بشكل غير متوقع (رمز {code}).{hint}\n{tail[-600:]}")
     res = json.loads(res_path.read_text(encoding="utf-8"))
     if not res.get("ok"):
         log.error("worker %s failed: %s", cmd, res.get("trace"))
@@ -92,8 +101,11 @@ def run_worker(cmd: str, args: dict, job: Path, on_progress: Callable[[float, st
 
 def generate(storyboard_path, resolution: str | None = None, seed: int = 0,
              progress: Callable[[float, str], None] = lambda p, d: None,
-             worker=run_worker) -> dict:
-    """Make the whole video. Returns {"video", "job_dir", "scenes", "seconds"}."""
+             worker=run_worker, on_scene: Callable[[int, str], None] | None = None) -> dict:
+    """Make the whole video. Returns {"video", "job_dir", "scenes", "seconds"}.
+    The motion of ALL scenes is made by one worker process (the video model loads once), then the
+    lip sync of all talking scenes by a second one. on_scene(index, mp4) is called as soon as a
+    scene's motion clip is ready (live preview)."""
     engine.reset_cancel()
     job = engine.new_job_dir("video")
     sb = sbmod.load(storyboard_path, job)
@@ -101,18 +113,13 @@ def generate(storyboard_path, resolution: str | None = None, seed: int = 0,
     n = len(sb.scenes)
     first = Image.open(sb.scenes[0].image)
     W, H = sbmod.frame_size(first.width, first.height, res)
-    clips, info = [], []
     t0 = time.time()
-    from ..pipeline import gpu_lock
+    progress(0.0, f"تجهيز {n} مشهد…")
+    plans = []
     for s in sb.scenes:
         engine.check_cancel()
         d = job / f"scene_{s.index:02d}"
         d.mkdir(exist_ok=True)
-        lo, hi = (s.index - 1) / n, s.index / n
-
-        def sub(a, b, label):
-            return lambda p, txt: progress(lo + (hi - lo) * (a + (b - a) * p), f"المشهد {s.index}/{n}: {txt or label}")
-
         voice = music = None
         seconds = s.seconds
         if s.audio and s.lipsync:
@@ -124,28 +131,58 @@ def generate(storyboard_path, resolution: str | None = None, seed: int = 0,
         motion_secs = min(seconds, MOTION_MAX_SECONDS)
         im = Image.open(s.image)
         w, h = sbmod.frame_size(im.width, im.height, res)
-        with gpu_lock(), engine.MANAGER.lock:
-            engine.claim_gpu()
-            engine.MANAGER.unload()       # the 3D models leave the GPU while the video runs
-            raw = d / "motion.mp4"
-            worker("i2v", {"image": str(s.image), "prompt": s.prompt, "width": w, "height": h,
-                           "frames": wan_frames(motion_secs), "fps": WAN_FPS, "seed": seed + s.index,
-                           "out": str(raw)}, d, sub(0.0, 0.6 if voice else 0.9, "توليد الحركة"))
-            if voice:
-                talk = d / "talk.mp4"
-                worker("lipsync", {"video": str(raw), "audio": str(voice), "out": str(talk), "seed": seed},
-                       d, sub(0.6, 0.95, "مزامنة الشفايف"))
-        sub(0.95, 1.0, "تجهيز")(0, "")
-        final = d / "final.mp4"
-        if voice:
-            media.normalize_clip(talk, final, W, H, seconds=seconds, audio=talk)
-        elif music:
-            media.normalize_clip(raw, final, W, H, seconds=seconds, audio=music, loop_video=True)
+        plans.append({"scene": s, "dir": d, "voice": voice, "music": music, "seconds": seconds,
+                      "motion_secs": motion_secs, "raw": d / "motion.mp4", "talk": d / "talk.mp4",
+                      "width": w, "height": h})
+    talking = [p for p in plans if p["voice"]]
+    a_end = 0.6 if talking else 0.93
+    b_end = 0.95
+
+    def span(a, b):
+        return lambda p, txt: progress(a + (b - a) * max(0.0, min(1.0, p)), txt)
+
+    def motion_ready(item):
+        if on_scene and item.get("ok") and item.get("out"):
+            on_scene(int(item.get("index", 0)), item["out"])
+
+    from ..pipeline import gpu_lock
+    with gpu_lock(), engine.MANAGER.lock:
+        engine.claim_gpu()
+        engine.MANAGER.unload()       # the 3D models leave the GPU while the video runs
+        jobs = [{"index": p["scene"].index, "label": f"المشهد {p['scene'].index}/{n}",
+                 "image": str(p["scene"].image), "prompt": p["scene"].prompt, "width": p["width"],
+                 "height": p["height"], "frames": wan_frames(p["motion_secs"]), "fps": WAN_FPS,
+                 "seed": seed + p["scene"].index, "out": str(p["raw"])} for p in plans]
+        worker("i2v", {"jobs": jobs}, job, span(0.0, a_end), on_item=motion_ready)
+        lip = {}
+        if talking:
+            jobs = [{"index": p["scene"].index, "label": f"المشهد {p['scene'].index}/{n}",
+                     "video": str(p["raw"]), "audio": str(p["voice"]), "out": str(p["talk"]), "seed": seed}
+                    for p in talking]
+            r = worker("lipsync", {"jobs": jobs}, job, span(a_end, b_end))
+            lip = {int(it.get("index", 0)): it for it in (r.get("items") or [])}
+    clips, info = [], []
+    for k, p in enumerate(plans):
+        engine.check_cancel()
+        s = p["scene"]
+        progress(b_end + (0.98 - b_end) * k / n, f"المشهد {s.index}/{n}: تجهيز")
+        final = p["dir"] / "final.mp4"
+        talked = bool(p["voice"]) and p["talk"].exists() and lip.get(s.index, {}).get("ok", True)
+        warning = None
+        if talked:
+            # the scene's own audio (full quality), not the 16 kHz copy the lip-sync model listened to
+            media.normalize_clip(p["talk"], final, W, H, seconds=p["seconds"], audio=s.audio)
+        elif p["voice"] or p["music"]:
+            if p["voice"]:
+                warning = lip.get(s.index, {}).get("error") or "تعذّرت مزامنة الشفايف"
+            media.normalize_clip(p["raw"], final, W, H, seconds=p["seconds"], audio=s.audio, loop_video=True)
         else:
-            media.normalize_clip(raw, final, W, H, seconds=None)
+            longer = p["seconds"] > p["motion_secs"] + 0.05
+            media.normalize_clip(p["raw"], final, W, H, seconds=p["seconds"] if longer else None,
+                                 loop_video=longer)
         clips.append(final)
-        info.append({"scene": s.index, "seconds": round(media.duration(final), 2), "talking": bool(voice),
-                     "prompt": s.prompt})
+        info.append({"scene": s.index, "seconds": round(media.duration(final), 2), "talking": talked,
+                     "prompt": s.prompt, **({"warning": warning} if warning else {})})
     progress(0.98, "دمج المشاهد…")
     safe = "".join(ch for ch in sb.title if ch.isalnum() or ch in " _-").strip() or "video"
     out = media.concat(clips, job / f"{safe}.mp4")

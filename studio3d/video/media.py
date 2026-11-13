@@ -87,7 +87,9 @@ def concat(clips: list, dst) -> Path:
     """Join normalized clips (same format) into one mp4 without re-encoding."""
     dst = Path(dst)
     lst = dst.with_suffix(".txt")
-    lst.write_text("".join(f"file '{Path(c).resolve().as_posix()}'\n" for c in clips), encoding="utf-8")
+    # concat-list quoting: a ' in the path (e.g. a Windows user name) is written as '\''
+    lst.write_text("".join("file '" + Path(c).resolve().as_posix().replace("'", "'\\''") + "'\n" for c in clips),
+                   encoding="utf-8")
     _run(["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", "-movflags", "+faststart", dst])
     lst.unlink(missing_ok=True)
     return dst

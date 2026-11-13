@@ -43,36 +43,40 @@ class ImageProcessor:
         )
         self.normalize = transforms.Normalize([0.5], [0.5], inplace=True)
 
-        self.restorer = AlignRestore(resolution=resolution, device=device)
+        # Studio3D: half precision only on the GPU (CPU warps need float32)
+        self.restorer = AlignRestore(resolution=resolution, device=device,
+                                     dtype=torch.float16 if "cuda" in str(device) else torch.float32)
 
         if mask_image is None:
             self.mask_image = load_fixed_mask(resolution)
         else:
             self.mask_image = mask_image
 
-        if device == "cpu":
-            self.face_detector = None
-        else:
-            self.face_detector = FaceDetector(device=device)
+        # Studio3D: the MediaPipe detector runs on the CPU anyway, so it is used on every device
+        self.face_detector = FaceDetector(device=device)
 
-    def affine_transform(self, image: torch.Tensor) -> np.ndarray:
-        if self.face_detector is None:
-            raise NotImplementedError("Using the CPU for face detection is not supported")
+    def face_points(self, image: np.ndarray):
+        """The 3 alignment points (brows + nose) of the face in a frame, or None."""
         bbox, landmark_2d_106 = self.face_detector(image)
         if bbox is None:
-            raise RuntimeError("Face not detected")
-
+            return None
         pt_left_eye = np.mean(landmark_2d_106[[43, 48, 49, 51, 50]], axis=0)  # left eyebrow center
         pt_right_eye = np.mean(landmark_2d_106[101:106], axis=0)  # right eyebrow center
         pt_nose = np.mean(landmark_2d_106[[74, 77, 83, 86]], axis=0)  # nose center
+        return np.round([pt_left_eye, pt_right_eye, pt_nose])
 
-        landmarks3 = np.round([pt_left_eye, pt_right_eye, pt_nose])
-
+    def warp_face(self, image: np.ndarray, landmarks3):
         face, affine_matrix = self.restorer.align_warp_face(image.copy(), landmarks3=landmarks3, smooth=True)
         box = [0, 0, face.shape[1], face.shape[0]]  # x1, y1, x2, y2
         face = cv2.resize(face, (self.resolution, self.resolution), interpolation=cv2.INTER_LANCZOS4)
         face = rearrange(torch.from_numpy(face), "h w c -> c h w")
         return face, box, affine_matrix
+
+    def affine_transform(self, image: torch.Tensor) -> np.ndarray:
+        landmarks3 = self.face_points(image)
+        if landmarks3 is None:
+            raise RuntimeError("Face not detected")
+        return self.warp_face(image, landmarks3)
 
     def preprocess_fixed_mask_image(self, image: torch.Tensor, affine_transform=False):
         if affine_transform:

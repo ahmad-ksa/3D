@@ -412,7 +412,8 @@ async def generate_video_from_storyboard(storyboard: str, resolution: Literal["4
         r = runner.generate(path, resolution, progress=pr)
         talking = sum(1 for x in r["scenes"] if x["talking"])
         return {"job_dir": r["job_dir"], "files": [r["video"]],
-                "stats": {}, "warning": None,
+                "stats": {}, "warning": "; ".join(f"scene {x['scene']}: {x['warning']}" for x in r["scenes"]
+                                                  if x.get("warning")) or None,
                 "summary": f"{len(r['scenes'])} scenes ({talking} talking), {r['seconds']} s"}
 
     job = _start("video", run)

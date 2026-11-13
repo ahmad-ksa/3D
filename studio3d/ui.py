@@ -400,6 +400,11 @@ def talk_tool(mesh_file, audio_file, strength, progress=gr.Progress()):
 
 
 def video_tool(images, story, audio, lipsync, resolution, sb_file, progress=gr.Progress()):
+    """Generator: each scene's motion clip is shown as soon as it is ready, then the whole video."""
+    import contextvars
+    import queue
+    import threading
+
     from .video import runner, storyboard
     try:
         if sb_file:                       # advanced: a ready storyboard.zip / .json
@@ -411,17 +416,41 @@ def video_tool(images, story, audio, lipsync, resolution, sb_file, progress=gr.P
             work = config.OUTPUT_DIR / "_video_inputs" / uuid.uuid4().hex[:8]
             imgs = [getattr(f, "name", f) for f in images]
             path = storyboard.from_inputs(imgs, story or "", audio, bool(lipsync), work)
-        r = runner.generate(path, resolution, progress=lambda p, d: progress(p, desc=d))
     except gr.Error:
         raise
-    except engine.Cancelled:
-        raise gr.Error("تم إيقاف توليد الفيديو.")
     except Exception as e:  # noqa: BLE001
         log.error(traceback.format_exc())
         raise gr.Error(f"تعذّر توليد الفيديو: {str(e)[:400]}")
+
+    ready, box = queue.Queue(), {}
+
+    def work_thread():
+        try:
+            box["r"] = runner.generate(path, resolution, progress=lambda p, d: progress(p, desc=d),
+                                       on_scene=lambda i, f: ready.put((i, f)))
+        except BaseException as e:  # noqa: BLE001
+            box["e"] = e
+        finally:
+            ready.put(None)
+
+    # the progress bar is tied to this event through context variables: run in a copy of them
+    threading.Thread(target=contextvars.copy_context().run, args=(work_thread,), daemon=True).start()
+    while (item := ready.get()) is not None:
+        i, f = item
+        yield f, f"🎞️ حركة المشهد {i} جاهزة — يكمل الباقي…"
+    e = box.get("e")
+    if isinstance(e, engine.Cancelled):
+        raise gr.Error("تم إيقاف توليد الفيديو.")
+    if isinstance(e, gr.Error):
+        raise e
+    if e is not None:
+        log.error("".join(traceback.format_exception(e)))
+        raise gr.Error(f"تعذّر توليد الفيديو: {str(e)[:400]}")
+    r = box["r"]
     talking = sum(1 for s in r["scenes"] if s["talking"])
-    return r["video"], (f"✅ {len(r['scenes'])} مشهد ({talking} فيها كلام/غناء) • {r['seconds']} ثانية  \n"
-                        f"<span class='hint'>محفوظ في: {r['job_dir']}</span>")
+    warn = "".join(f"  \n⚠️ المشهد {s['scene']}: {s['warning']}" for s in r["scenes"] if s.get("warning"))
+    yield r["video"], (f"✅ {len(r['scenes'])} مشهد ({talking} فيها كلام/غناء) • {r['seconds']} ثانية{warn}  \n"
+                       f"<span class='hint'>محفوظ في: {r['job_dir']}</span>")
 
 
 def video_scenes_preview(images, story, audio):
@@ -773,7 +802,8 @@ def build() -> gr.Blocks:
                                             file_types=[".zip", ".json"], type="filepath", height=90)
                             vtpl = gr.Button("⬇️ نموذج ملف ستوري بورد", size="sm")
                             vtpl_file = gr.File(label="النموذج", interactive=False, height=70)
-                        gr.Markdown("أول مرة يحمّل نماذج الفيديو (~28GB). كل مشهد ياخذ عدة دقائق على كرت 8GB.",
+                        gr.Markdown("أول مرة يحمّل نماذج الفيديو (~28GB). النموذج يتحمّل مرة وحدة لكل الفيديو، "
+                                    "وكل مشهد ياخذ عدة دقائق على كرت 8GB.",
                                     elem_classes="hint")
                     with gr.Column(scale=6):
                         vplan = gr.Markdown("ارفع صورة واكتب الستوري بورد — يطلع هنا تقسيم المشاهد.")

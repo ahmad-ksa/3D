@@ -250,12 +250,21 @@ class LipsyncPipeline(DiffusionPipeline):
         return images
 
     def affine_transform_video(self, video_frames: np.ndarray):
+        # Studio3D: a frame where the face is not found (head turned, motion blur, cartoon face) takes
+        # the face position of the nearest frame where it was found, instead of failing the whole clip.
+        print(f"Affine transforming {len(video_frames)} faces...")
+        points = [self.image_processor.face_points(frame) for frame in tqdm.tqdm(video_frames)]
+        found = [i for i, p in enumerate(points) if p is not None]
+        if not found:
+            raise RuntimeError("Face not detected")
+        if len(found) < len(points):
+            print(f"Face not found in {len(points) - len(found)} of {len(points)} frames: using the nearest one")
         faces = []
         boxes = []
         affine_matrices = []
-        print(f"Affine transforming {len(video_frames)} faces...")
-        for frame in tqdm.tqdm(video_frames):
-            face, box, affine_matrix = self.image_processor.affine_transform(frame)
+        for i, frame in enumerate(video_frames):
+            p = points[i] if points[i] is not None else points[min(found, key=lambda j: abs(j - i))]
+            face, box, affine_matrix = self.image_processor.warp_face(frame, p)
             faces.append(face)
             boxes.append(box)
             affine_matrices.append(affine_matrix)
@@ -339,7 +348,7 @@ class LipsyncPipeline(DiffusionPipeline):
         # 0. Define call parameters
         device = self._execution_device
         mask_image = load_fixed_mask(height, mask_image_path)
-        self.image_processor = ImageProcessor(height, device="cuda", mask_image=mask_image)
+        self.image_processor = ImageProcessor(height, device=str(device), mask_image=mask_image)
         self.set_progress_bar_config(desc=f"Sample frames: {num_frames}")
 
         # 1. Default height and width to unet

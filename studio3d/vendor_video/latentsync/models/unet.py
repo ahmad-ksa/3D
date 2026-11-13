@@ -492,21 +492,36 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         return super().load_state_dict(state_dict=state_dict, strict=strict)
 
     @classmethod
-    def from_pretrained(cls, model_config: dict, ckpt_path: str, device="cpu"):
+    def from_pretrained(cls, model_config: dict, ckpt_path: str, device="cpu", dtype=None):
         unet = cls.from_config(model_config).to(device)
         if ckpt_path != "":
             zero_rank_log(logger, f"Load from checkpoint: {ckpt_path}")
-            ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+            # Studio3D: memory-map the 5 GB checkpoint instead of reading it into RAM next to the model
+            try:
+                ckpt = torch.load(ckpt_path, map_location=device, weights_only=True, mmap=True)
+            except RuntimeError:
+                ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
             if "global_step" in ckpt:
                 zero_rank_log(logger, f"resume from global_step: {ckpt['global_step']}")
                 resume_global_step = ckpt["global_step"]
             else:
                 resume_global_step = 0
-            unet.load_state_dict(ckpt["state_dict"], strict=False)
+            missing, _ = unet.load_state_dict(ckpt["state_dict"], strict=False)
+            # Studio3D: strict=False hides a config that does not match the checkpoint (random weights
+            # -> garbage mouths). Buffers (positional tables) may be missing, real weights may not.
+            params = dict(unet.named_parameters())
+            lost = [k for k in missing if k in params]
+            if len(lost) > 0.01 * len(params):
+                raise RuntimeError(f"LatentSync checkpoint does not match the UNet config ({len(lost)} weights "
+                                   f"missing, e.g. {lost[:3]})")
+            if lost:
+                logger.warning(f"LatentSync: {len(lost)} weights not in the checkpoint: {lost[:5]}")
 
             del ckpt
             torch.cuda.empty_cache()
         else:
             resume_global_step = 0
+        if dtype is not None:
+            unet = unet.to(dtype=dtype)
 
         return unet, resume_global_step

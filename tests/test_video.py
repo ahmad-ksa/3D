@@ -130,34 +130,71 @@ def test_face_landmarks_map_to_latentsync_layout():
     assert x1 < 120 and x2 > 280 and y2 > 300 and y1 < 160
 
 
+def _fake_batch_worker(calls, no_face=()):
+    """Stands in for the worker process: one call per phase, a list of scene jobs each."""
+
+    def fake_worker(cmd, args, job, on_progress, on_item=None):
+        calls.append((cmd, args))
+        items = []
+        for k, a in enumerate(args["jobs"]):
+            on_progress((k + 0.5) / len(args["jobs"]), "…")
+            if cmd == "i2v":
+                assert (a["frames"] - 1) % 4 == 0 and a["width"] % 32 == 0
+                _clip(Path(a["out"]), (a["frames"] - 1) / 24, a["width"], a["height"])
+                it = {"index": a["index"], "out": a["out"], "ok": True}
+            elif a["index"] in no_face:
+                it = {"index": a["index"], "ok": False, "no_face": True, "error": "no face"}
+            else:  # lipsync: video looped to the voice + the voice muxed in
+                secs = media.duration(a["audio"])
+                _clip(Path(a["out"]), secs, 160, 96, fps=25, audio=Path(a["audio"]))
+                it = {"index": a["index"], "out": a["out"], "ok": True}
+            items.append(it)
+            if on_item:
+                on_item(it)
+        return {"ok": True, "items": items}
+
+    return fake_worker
+
+
 def test_runner_makes_one_video_from_scenes(tmp_path, monkeypatch):
     monkeypatch.setattr(engine.config, "OUTPUT_DIR", tmp_path / "out")
-    calls = []
-
-    def fake_worker(cmd, args, job, on_progress):
-        calls.append((cmd, args))
-        on_progress(0.5, "…")
-        if cmd == "i2v":
-            assert (args["frames"] - 1) % 4 == 0 and args["width"] % 32 == 0
-            _clip(Path(args["out"]), (args["frames"] - 1) / 24, args["width"], args["height"])
-        else:  # lipsync: video looped to the voice + the voice muxed in
-            secs = media.duration(args["audio"])
-            _clip(Path(args["out"]), secs, 160, 96, fps=25, audio=Path(args["audio"]))
-        return {"ok": True, "out": args["out"]}
-
+    calls, previews = [], []
     seen = []
-    r = runner.generate(_storyboard(tmp_path), "480p", progress=lambda p, d: seen.append(p), worker=fake_worker)
-    assert [c[0] for c in calls] == ["i2v", "lipsync", "i2v"]
+    r = runner.generate(_storyboard(tmp_path), "480p", progress=lambda p, d: seen.append(p),
+                        worker=_fake_batch_worker(calls), on_scene=lambda i, f: previews.append((i, f)))
+    # ONE worker for the motion of every scene, ONE for all lip syncs (models load once each)
+    assert [c[0] for c in calls] == ["i2v", "lipsync"]
+    assert [j["index"] for j in calls[0][1]["jobs"]] == [1, 2] and len(calls[1][1]["jobs"]) == 1
+    assert [i for i, _ in previews] == [1, 2] and all(Path(f).exists() for _, f in previews)
     assert Path(r["video"]).exists()
     assert abs(r["seconds"] - 5.0) < 0.5           # 2 s talking scene + 3 s scene
     assert r["scenes"][0]["talking"] and not r["scenes"][1]["talking"]
     assert seen == sorted(seen) and seen[-1] == 1.0
 
 
+def test_runner_scene_without_face_keeps_voice(tmp_path, monkeypatch):
+    """No face for the lip-sync model in one scene: that scene keeps its motion + voice, the video is made."""
+    monkeypatch.setattr(engine.config, "OUTPUT_DIR", tmp_path / "out")
+    r = runner.generate(_storyboard(tmp_path), "480p", worker=_fake_batch_worker([], no_face={1}))
+    s1 = r["scenes"][0]
+    assert not s1["talking"] and s1.get("warning") and abs(s1["seconds"] - 2.0) < 0.3
+    assert abs(r["seconds"] - 5.0) < 0.5
+
+
+def test_runner_long_silent_scene_is_not_cut(tmp_path, monkeypatch):
+    """A silent 7 s scene: the 5 s motion clip is repeated, the scene is not cut to 5 s."""
+    monkeypatch.setattr(engine.config, "OUTPUT_DIR", tmp_path / "out")
+    img = tmp_path / "a.png"
+    Image.new("RGB", (320, 180), (200, 80, 20)).save(img)
+    path = sb.from_inputs([img], "walks | 7", None, False, tmp_path / "w")
+    r = runner.generate(path, "480p", worker=_fake_batch_worker([]))
+    assert abs(r["seconds"] - 7.0) < 0.3
+
+
 def test_runner_stops_on_cancel(tmp_path, monkeypatch):
     monkeypatch.setattr(engine.config, "OUTPUT_DIR", tmp_path / "out")
 
-    def fake_worker(cmd, args, job, on_progress):
+    def fake_worker(cmd, args, job, on_progress, on_item=None):
         engine.request_cancel()
         engine.check_cancel()
 
@@ -262,14 +299,10 @@ def test_runner_music_scene_loops_motion(tmp_path, monkeypatch):
     song = _wav(tmp_path / "song.wav", 7.0)
     path = sb.from_inputs([img], "dance", song, False, tmp_path / "w")
     calls = []
-
-    def fake_worker(cmd, args, job, on_progress):
-        calls.append(cmd)
-        _clip(Path(args["out"]), (args["frames"] - 1) / 24, args["width"], args["height"])
-        return {"ok": True}
+    fake_worker = _fake_batch_worker(calls)
 
     r = runner.generate(path, "480p", worker=fake_worker)
-    assert calls == ["i2v"]                       # no lip sync for music
+    assert [c[0] for c in calls] == ["i2v"]                       # no lip sync for music
     assert abs(r["seconds"] - 7.0) < 0.4          # 5 s motion looped under 7 s of music
 
 
@@ -302,3 +335,74 @@ def test_worker_stops_when_the_app_is_gone(tmp_path):
     p = subprocess.run([sys.executable, "-c", code, str(args)], cwd=root, timeout=60,
                        env=dict(os.environ, PYTHONPATH=str(root)))
     assert p.returncode == 3 and time.time() - t < 20
+
+
+def _run_check(script: str, tmp_path: Path, marker: str):
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    r = subprocess.run([sys.executable, str(root / "tests" / script), str(tmp_path)], cwd=root,
+                       capture_output=True, text=True, timeout=900,
+                       env=dict(os.environ, PYTHONPATH=str(root), STUDIO3D_HOME=str(tmp_path / "home")))
+    assert marker in r.stdout, (r.stdout[-2000:] + r.stderr[-3000:])
+
+
+@_needs_libs
+def test_worker_loads_wan_in_8bit_once_for_all_scenes(tmp_path):
+    """Tiny FastWan-shaped folder on disk: 8-bit loader == from_pretrained + layerwise casting (bit-exact),
+    still exact with block streaming, text encoder 8-bit and really freed, 2 scenes with ONE model load."""
+    _run_check("_video_loader_check.py", tmp_path, "LOADER-OK")
+
+
+@_needs_libs
+def test_worker_lipsync_end_to_end_with_tiny_models(tmp_path):
+    """Real LatentSync pipeline + worker: ffmpeg by name in a folder with spaces/Arabic, voice longer than
+    the clip (looped), face lost in some frames (nearest face used), no face at all (scene reported)."""
+    _run_check("_video_lipsync_check.py", tmp_path, "LIPSYNC-OK")
+
+
+def test_run_worker_relays_progress_and_finished_scenes(tmp_path, monkeypatch):
+    """The real run_worker with a stand-in worker process: progress lines, finished scenes, result."""
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("uses a shell script as the worker")
+    script = tmp_path / "fake_python"
+    script.write_text(
+        "#!/bin/sh\n"
+        "eval \"args=\\${$#}\"\n"
+        "echo '@@P 0.5 half'\n"
+        "echo '@@S {\"index\": 3, \"out\": \"x.mp4\", \"ok\": true}'\n"
+        f"{sys.executable} -c \"import json,sys; a=json.load(open(sys.argv[1])); "
+        "open(a['result'],'w').write(json.dumps({'ok': True, 'items': []}))\" \"$args\"\n",
+        encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setattr(runner, "_worker_python", lambda: str(script))
+    monkeypatch.setattr(runner.media, "ffmpeg_dir", lambda cache: Path(cache))
+    got, items = [], []
+    r = runner.run_worker("i2v", {"jobs": []}, tmp_path, lambda p, t: got.append((p, t)), on_item=items.append)
+    assert r["ok"] and got == [(0.5, "half")] and items == [{"index": 3, "out": "x.mp4", "ok": True}]
+
+
+def test_video_tab_shows_each_scene_when_ready(tmp_path, monkeypatch):
+    """The 🎬 tab streams each finished motion clip, then the whole video; errors become messages."""
+    import gradio as gr
+
+    from studio3d import ui
+
+    def fake_generate(path, resolution, progress=None, on_scene=None):
+        progress(0.5, "…")
+        on_scene(1, "s1.mp4")
+        on_scene(2, "s2.mp4")
+        return {"video": "all.mp4", "job_dir": str(tmp_path), "seconds": 9.0,
+                "scenes": [{"scene": 1, "talking": True}, {"scene": 2, "talking": False, "warning": "no face"}]}
+
+    monkeypatch.setattr(runner, "generate", fake_generate)
+    sbf = _storyboard(tmp_path, zipped=False)
+    outs = list(ui.video_tool(None, "", None, True, "480p", str(sbf)))
+    assert [o[0] for o in outs] == ["s1.mp4", "s2.mp4", "all.mp4"] and "no face" in outs[-1][1]
+
+    def failing(path, resolution, progress=None, on_scene=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "generate", failing)
+    with pytest.raises(gr.Error):
+        list(ui.video_tool(None, "", None, True, "480p", str(sbf)))
