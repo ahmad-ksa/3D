@@ -77,6 +77,17 @@ def main():
     print("  اترك هذه النافذة مفتوحة أثناء استخدام البرنامج.")
     print("=" * 60)
 
+    url = f"http://{config.HOST}:{args.port}"
+    if _port_busy(config.HOST, args.port):
+        if _is_studio3d(url):
+            print("البرنامج شغال من قبل — أفتح نافذته.", flush=True)
+            if not args.no_window:
+                open_window(url)
+            return
+        args.port = _free_port(config.HOST, args.port + 1)
+        url = f"http://{config.HOST}:{args.port}"
+        print(f"المنفذ مشغول ببرنامج ثاني، أستخدم {args.port}.", flush=True)
+
     from . import engine, ui
     freed = config.remove_ckpt_duplicates()
     if freed:
@@ -86,12 +97,34 @@ def main():
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     app = create_app(ui.build())
-    url = f"http://{config.HOST}:{args.port}"
     if not args.no_window:
         threading.Thread(target=lambda: (time.sleep(2.5), open_window(url)), daemon=True).start()
     print(f"* Running on local URL:  {url}", flush=True)
     import uvicorn
     uvicorn.run(app, host=config.HOST, port=args.port, log_level="warning")
+
+
+def _port_busy(host: str, port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
+def _is_studio3d(url: str) -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url + "/s3d-static/viewer.js", timeout=3) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _free_port(host: str, start: int) -> int:
+    for p in range(start, start + 50):
+        if not _port_busy(host, p):
+            return p
+    return start
 
 
 def create_app(demo):

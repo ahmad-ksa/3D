@@ -187,6 +187,12 @@ def generate(storyboard_path, resolution: str | None = None, seed: int = 0,
     safe = "".join(ch for ch in sb.title if ch.isalnum() or ch in " _-").strip() or "video"
     out = media.concat(clips, job / f"{safe}.mp4")
     total = round(media.duration(out), 2)
+    try:  # one folder with all finished videos
+        import shutil
+        config.VIDEO_OUT_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(out, config.VIDEO_OUT_DIR / f"{job.name}_{safe}.mp4")
+    except OSError as e:
+        log.warning("could not copy the video to %s: %s", config.VIDEO_OUT_DIR, e)
     engine.save_meta(job, {"kind": "video", "title": sb.title, "resolution": res, "size": [W, H],
                            "scenes": info, "seconds": total, "minutes_taken": round((time.time() - t0) / 60, 1),
                            "files": [out.name]})

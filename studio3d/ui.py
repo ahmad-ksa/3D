@@ -476,6 +476,15 @@ def video_scenes_preview(images, story, audio):
     return "**المشاهد:**  \n" + "  \n".join(rows) + tail
 
 
+def video_open_folder():
+    config.VIDEO_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        library.open_path(config.VIDEO_OUT_DIR)
+    except Exception as e:  # noqa: BLE001
+        return f"تعذّر فتح المجلد: {e}"
+    return f"<span class='hint'>📂 {config.VIDEO_OUT_DIR}</span>"
+
+
 def video_template():
     from .video import storyboard
     return str(storyboard.write_template(config.OUTPUT_DIR / "_templates" / "storyboard_example.zip"))
@@ -797,6 +806,7 @@ def build() -> gr.Blocks:
                         with gr.Row():
                             vbtn = gr.Button("🎬 توليد الفيديو", variant="primary")
                             vstop = gr.Button("⏹ إيقاف", variant="stop")
+                        vfolder = gr.Button("📂 فتح مجلد الفيديوهات", size="sm")
                         with gr.Accordion("متقدم: ملف ستوري بورد جاهز (zip / json)", open=False):
                             vfile = gr.File(label="storyboard.zip أو storyboard.json (يتجاهل الخانات فوق)",
                                             file_types=[".zip", ".json"], type="filepath", height=90)
@@ -814,6 +824,7 @@ def build() -> gr.Blocks:
                 vev = vbtn.click(video_tool, [vimgs, vstory, vaudio, vlip, vres, vfile], [vout, vinfo])
                 vstop.click(stop_generation, None, None, cancels=[vev])
                 vtpl.click(video_template, None, vtpl_file)
+                vfolder.click(video_open_folder, None, vinfo)
 
             # ---- library ----
             with gr.Tab("📚 مكتبتي"):

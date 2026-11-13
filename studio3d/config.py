@@ -74,6 +74,7 @@ VIDEO_TEXT_MODEL = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"              # text encoder
 LIPSYNC_MODEL = "ByteDance/LatentSync-1.5"                         # runs in ~8 GB (1.6 needs 18 GB)
 LIPSYNC_VAE = "stabilityai/sd-vae-ft-mse"
 # newer diffusers for the video model only (the 3D models keep diffusers 0.32)
+VIDEO_OUT_DIR = OUTPUT_DIR / "videos"     # every finished video is copied here (📂 button in the 🎬 tab)
 VIDEO_LIBS_DIR = Path(os.environ.get("STUDIO3D_VIDEO_LIBS", DATA_ROOT / "video_libs"))
 
 # ---------------------------------------------------------------------------

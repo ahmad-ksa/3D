@@ -166,13 +166,18 @@ def export_to(model_id: str, destination: str, formats: list[str] | None = None,
 
 
 def open_folder(model_id: str):
-    d = _dir(model_id)
+    open_path(_dir(model_id))
+
+
+def open_path(d):
+    """Show a folder in the file explorer."""
+    d = str(d)
     if sys.platform == "win32":
-        os.startfile(str(d))  # noqa: S606
+        os.startfile(d)  # noqa: S606
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(d)])
+        subprocess.Popen(["open", d])
     else:
-        subprocess.Popen(["xdg-open", str(d)])
+        subprocess.Popen(["xdg-open", d])
 
 
 def open_in_blender(model_id: str, which: str | None = None) -> str:
