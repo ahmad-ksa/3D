@@ -197,9 +197,35 @@ def run_i2v(pipe, a: dict, emb) -> list:
     gen = torch.Generator(device="cpu").manual_seed(int(a.get("seed", 0)))
     dtype = pipe.transformer.dtype if pipe.transformer is not None else torch.bfloat16
     with torch.inference_mode():
-        return pipe(image=img, prompt_embeds=emb.to(dtype), height=a["height"], width=a["width"],
-                    num_frames=a["frames"], num_inference_steps=steps, guidance_scale=1.0,
-                    generator=gen, callback_on_step_end=on_step).frames[0]
+        latents = pipe(image=img, prompt_embeds=emb.to(dtype), height=a["height"], width=a["width"],
+                       num_frames=a["frames"], num_inference_steps=steps, guidance_scale=1.0,
+                       generator=gen, callback_on_step_end=on_step, output_type="latent").frames
+        progress(0.9, "تحويل الحركة إلى صور…")
+        return decode_latents(pipe, latents)
+
+
+def decode_latents(pipe, latents) -> list:
+    """VAE decode AFTER the 5B transformer has left the GPU. Decoding inside the pipeline kept the
+    transformer and the VAE on the 8 GB card together -> out of memory at the very last step."""
+    import gc
+
+    import torch
+    for name in ("transformer", "transformer_2", "text_encoder", "image_encoder"):
+        m = getattr(pipe, name, None)
+        if m is not None and next(m.parameters(), None) is not None and next(m.parameters()).device.type != "cpu":
+            m.to("cpu")
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    vae = pipe.vae
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    vae.to(dev)
+    z = latents.to(dev, vae.dtype)
+    mean = torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1).to(dev, vae.dtype)
+    inv_std = 1.0 / torch.tensor(vae.config.latents_std).view(1, vae.config.z_dim, 1, 1, 1).to(dev, vae.dtype)
+    z = z / inv_std + mean
+    video = vae.decode(z, return_dict=False)[0]
+    return pipe.video_processor.postprocess_video(video, output_type="pil")[0]
 
 
 def cmd_i2v(a: dict, config) -> dict:
