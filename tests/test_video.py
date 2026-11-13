@@ -406,3 +406,30 @@ def test_video_tab_shows_each_scene_when_ready(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "generate", failing)
     with pytest.raises(gr.Error):
         list(ui.video_tool(None, "", None, True, "480p", str(sbf)))
+
+
+def test_lipsync_noise_with_cpu_seed_and_other_device():
+    """The seed generator is on the CPU while the model runs on CUDA (crashed on the user's PC)."""
+    import sys
+    import torch
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "studio3d" / "vendor_video"))
+    from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+
+    class Fake:
+        vae_scale_factor = 8
+        scheduler = type("S", (), {"init_noise_sigma": 1.0})()
+
+    seen = {}
+    real = torch.randn
+
+    def randn(*a, **k):  # a CUDA device with a CPU generator is what failed
+        seen["device"] = str(k.get("device"))
+        return real(*a, **{**k, "device": "cpu"})
+
+    torch.randn = randn
+    try:
+        g = torch.Generator(device="cpu").manual_seed(1)
+        out = LipsyncPipeline.prepare_latents(Fake(), 4, 4, 64, 64, torch.float32, torch.device("cpu"), g)
+    finally:
+        torch.randn = real
+    assert seen["device"] == "cpu" and out.shape == (1, 4, 4, 8, 8)

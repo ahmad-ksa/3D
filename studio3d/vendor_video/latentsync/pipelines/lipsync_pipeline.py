@@ -183,6 +183,8 @@ class LipsyncPipeline(DiffusionPipeline):
             width // self.vae_scale_factor,
         )  # (b, c, f, h, w)
         rand_device = "cpu" if device.type == "mps" else device
+        if generator is not None:  # Studio3D: make the noise where the generator lives (cpu seed + cuda model)
+            rand_device = generator.device
         latents = torch.randn(shape, generator=generator, device=rand_device, dtype=dtype).to(device)
         latents = latents.repeat(1, 1, num_frames, 1, 1)
 
