@@ -163,12 +163,33 @@ def _load_i2v(snap: Path):
                                                    torch_dtype=torch.bfloat16)
     pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config, flow_shift=8.0)
     if torch.cuda.is_available():
-        # 5B weights stored in 8-bit (computed in bf16): ~5 GB instead of 10 GB on the GPU
-        pipe.transformer.enable_layerwise_casting(storage_dtype=torch.float8_e4m3fn,
-                                                  compute_dtype=torch.bfloat16)
-        pipe.enable_model_cpu_offload()
+        # 8 GB card: the 5B transformer never sits on the GPU whole. Weights are stored in 8-bit
+        # (computed in bf16) and streamed block by block from RAM while the previous block computes.
+        # (The first version put transformer + VAE on the card together: 12 GB on an 8 GB card
+        #  -> Windows spilled into shared memory -> ~12 minutes per step.)
+        tr = pipe.transformer
+        tr.enable_layerwise_casting(storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+        tr.enable_group_offload(onload_device=torch.device("cuda"), offload_device=torch.device("cpu"),
+                                offload_type="block_level", num_blocks_per_group=2, use_stream=True)
+        _vae_on_gpu_only_while_used(pipe.vae)
     _maybe_tiling(pipe.vae)
     return pipe
+
+
+def _vae_on_gpu_only_while_used(vae):
+    """The VAE (2.8 GB) lives in RAM and visits the GPU only to encode the start image."""
+    import torch
+    orig = vae.encode
+
+    def encode(x, *a, **k):
+        vae.to("cuda")
+        try:
+            return orig(x.to("cuda", vae.dtype), *a, **k)
+        finally:
+            vae.to("cpu")
+            torch.cuda.empty_cache()
+
+    vae.encode = encode
 
 
 def _maybe_tiling(vae) -> bool:
@@ -190,7 +211,13 @@ def run_i2v(pipe, a: dict, emb) -> list:
     img = Image.open(a["image"]).convert("RGB").resize((a["width"], a["height"]), Image.LANCZOS)
     steps = int(a.get("steps", 4))
 
+    t_start = time.time()
+
     def on_step(p, i, t, kw):
+        mem = ""
+        if torch.cuda.is_available():
+            mem = f" (VRAM {torch.cuda.max_memory_allocated() / 1024 ** 3:.1f} GB)"
+            print(f"step {i + 1}/{steps} after {time.time() - t_start:.0f}s{mem}", flush=True)
         progress(0.2 + 0.7 * (i + 1) / steps, f"توليد الحركة {i + 1}/{steps}")
         return {}
 
@@ -212,8 +239,14 @@ def decode_latents(pipe, latents) -> list:
     import torch
     for name in ("transformer", "transformer_2", "text_encoder", "image_encoder"):
         m = getattr(pipe, name, None)
-        if m is not None and next(m.parameters(), None) is not None and next(m.parameters()).device.type != "cpu":
-            m.to("cpu")
+        if m is None:
+            continue
+        try:   # group-offloaded models are already back in RAM after their last block
+            p0 = next(m.parameters(), None)
+            if p0 is not None and p0.device.type != "cpu":
+                m.to("cpu")
+        except Exception:  # noqa: BLE001
+            pass
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
